@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# 量化规则收集Agent启动脚本
+
+echo "=================================="
+echo "量化规则收集 Agent"
+echo "=================================="
+echo ""
+
+# 检查.env文件
+if [ ! -f .env ]; then
+    echo "⚠️  未找到.env文件，正在创建..."
+    cp .env.example .env
+    echo "✅ 已创建.env文件"
+    echo ""
+    echo "❗️ 重要: 请编辑.env文件，填入你的OpenAI API Key"
+    echo "   编辑命令: nano .env"
+    echo ""
+    read -p "按Enter继续..."
+fi
+
+# 检查依赖
+echo "检查依赖..."
+if ! pip show langchain > /dev/null 2>&1; then
+    echo "📦 正在安装依赖..."
+    pip install -r requirements.txt
+fi
+
+echo ""
+echo "🚀 启动应用..."
+echo ""
+echo "访问地址: http://localhost:5000"
+echo "按 Ctrl+C 停止服务器"
+echo ""
+
+# 启动应用
+python backend/app.py
+

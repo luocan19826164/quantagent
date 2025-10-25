@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>量化规则收集 Agent</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- 头部 -->
+        <header class="header">
+            <h1>🤖 量化规则收集 Agent</h1>
+            <p class="subtitle">通过对话完善你的量化交易策略</p>
+        </header>
+
+        <!-- 主要内容区 -->
+        <div class="main-content">
+            <!-- 聊天区域 -->
+            <div class="chat-section">
+                <div class="chat-header">
+                    <h2>💬 对话区</h2>
+                    <button id="resetBtn" class="btn btn-secondary">重置会话</button>
+                </div>
+                
+                <div id="chatMessages" class="chat-messages">
+                    <div class="message bot-message">
+                        <div class="message-content">
+                            <div class="loading">初始化中...</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="chat-input-container">
+                    <textarea 
+                        id="userInput" 
+                        class="chat-input" 
+                        placeholder="在这里描述你的策略想法..."
+                        rows="3"
+                    ></textarea>
+                    <button id="sendBtn" class="btn btn-primary">发送</button>
+                </div>
+            </div>
+
+            <!-- 状态面板 -->
+            <div class="state-section">
+                <div class="state-header">
+                    <h2>📋 规则状态</h2>
+                    <div id="completenessIndicator" class="completeness-indicator incomplete">
+                        未完成
+                    </div>
+                </div>
+                
+                <div id="stateContent" class="state-content">
+                    <div class="state-loading">等待收集信息...</div>
+                </div>
+                
+                <button id="finalizeBtn" class="btn btn-success" style="width: 100%; margin-top: 15px;" disabled>
+                    生成最终规则
+                </button>
+            </div>
+        </div>
+
+        <!-- 指标参考 -->
+        <div class="indicators-section collapsed">
+            <div class="indicators-header" onclick="toggleIndicators()">
+                <h3>📊 可用技术指标 <span class="toggle-icon">▼</span></h3>
+            </div>
+            <div id="indicatorsContent" class="indicators-content" style="display: none;">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 最终规则弹窗 -->
+    <div id="finalRulesModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>✅ 规则收集完成</h2>
+                <span class="close" onclick="closeFinalRulesModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p class="success-message">恭喜！你的量化策略已经完善。以下是最终的规则配置：</p>
+                <pre id="finalRulesJson" class="json-display"></pre>
+                <div class="modal-actions">
+                    <button onclick="downloadRules()" class="btn btn-primary">下载配置</button>
+                    <button onclick="copyRules()" class="btn btn-secondary">复制JSON</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
+
