@@ -8,9 +8,8 @@
 from typing import Dict, Any, List, Optional
 from . import tools_catalog as tc
 import inspect
-
-
-# ============ 底层提取函数（DRY原则：Don't Repeat Yourself） ============
+from .tools_catalog import EXCHANGE_PRODUCTS
+from .tools_catalog import EXCHANGE_PRODUCTS
 
 def _extract_tool_metadata(tool: Any) -> Dict[str, Any]:
     """
@@ -107,9 +106,16 @@ def get_capability_manifest_text() -> str:
     parts.append("=== 工具能力清单（仅作判断依据，禁止返回action或调用） ===\n")
     
     # 固定常量信息
-    parts.append(f"支持的市场: {', '.join(tc.SUPPORTED_MARKETS)}")
     parts.append(f"支持的时间周期: {', '.join(tc.SUPPORTED_TIMEFRAMES)}")
-    parts.append(f"支持的交易对（示例）: {', '.join(tc.SUPPORTED_SYMBOLS[:10])} ...")
+    
+    # 交易所信息
+    parts.append(f"\n支持的交易所: {', '.join(EXCHANGE_PRODUCTS.keys())}")
+    parts.append("\n交易所支持的产品类型：")
+    for exchange, products in EXCHANGE_PRODUCTS.items():
+        if products:
+            parts.append(f"  • {exchange}: {', '.join(products)}")
+        else:
+            parts.append(f"  • {exchange}: （股票交易所，不支持加密货币产品）")
     parts.append("")
     
     # 从工具中自动提取
@@ -159,9 +165,8 @@ def get_capability_manifest_json() -> Dict[str, Any]:
         })
     
     return {
-        "markets": tc.SUPPORTED_MARKETS,
         "timeframes": tc.SUPPORTED_TIMEFRAMES,
-        "symbols": tc.SUPPORTED_SYMBOLS,
+        "exchanges": EXCHANGE_PRODUCTS,
         "tools": tools_info
     }
 

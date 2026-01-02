@@ -2,77 +2,105 @@
 工具清单（仅能力与边界，不执行调用）
 
 说明：
-- 这些函数全部用 @tool 注解，仅用于向LLM暴露“可用能力/参数边界/返回结构/示例用法”。
-- 在本策略收集Agent中，这些工具不会被实际调用；它们是“能力约束”的知识，不产生 action。
+- 这些函数全部用 @tool 注解，仅用于向LLM暴露"可用能力/参数边界/返回结构/示例用法"。
+- 在本策略收集Agent中，这些工具不会被实际调用；它们是"能力约束"的知识，不产生 action。
 - 未来若实现执行Agent，可复用这些定义对接真实数据源。
 """
 
 from typing import List, Dict, Any
 from langchain.tools import tool
 
-# ============ 能力常量（供清单生成使用；避免在运行期调用 @tool ============
+# ============ 能力常量 ============
 
-SUPPORTED_MARKETS: List[str] = ["现货", "合约", "期货", "期权"]
 SUPPORTED_TIMEFRAMES: List[str] = ["1m","5m","15m","30m","1h","4h","1d","1w","1M"]
-SUPPORTED_SYMBOLS: List[str] = [
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT",
-    "SOLUSDT", "XRPUSDT", "DOTUSDT", "MATICUSDT", "LINKUSDT",
-    "AVAXUSDT", "ATOMUSDT", "UNIUSDT", "LTCUSDT", "ETCUSDT"
-]
 
-# （INDICATOR_SPECS 已删除，改为从 @tool 函数自动提取）
+# ============ 交易所与产品映射（默认数据）===========
 
-
-# ============ 市场 / 交易元信息 ============
-
-@tool
-def list_markets() -> List[str]:
-    """
-    获取支持的市场类型。
-    用途：用于校验用户给出的 market 是否在能力范围内。
-
-    返回：固定集合
-    ["现货", "合约", "期货", "期权"]
-
-    限制：只支持上述四种；其他市场类型（如股票、外汇等）不在当前能力范围。
-    示例：
-    - 校验：如果用户给出 "现货" → 可支持；"股票" → 不支持。
-    """
-    return SUPPORTED_MARKETS
+# 交易所支持的产品类型（代码级别使用英文）
+EXCHANGE_PRODUCTS: Dict[str, List[str]] = {
+    "Binance": ["spot", "contract"],
+    "OKX": ["spot", "contract"],
+    "Bybit": ["spot", "contract"],
+    "Coinbase": ["spot"],
+    "Kraken": ["spot"],
+    "NYSE": [],  # 股票交易所，不支持加密货币产品
+    "NASDAQ": [],  # 股票交易所，不支持加密货币产品
+}
 
 
 @tool
-def list_symbols() -> List[str]:
+def list_exchanges() -> List[str]:
     """
-    获取支持的交易对。
-    用途：用于校验 symbols 白名单。
-
-    返回：固定白名单（示例）
-    [
-      "BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT",
-      "SOLUSDT", "XRPUSDT", "DOTUSDT", "MATICUSDT", "LINKUSDT",
-      "AVAXUSDT", "ATOMUSDT", "UNIUSDT", "LTCUSDT", "ETCUSDT"
-    ]
-
-    限制：只支持白名单内交易对；其他交易对视为超出能力范围。
-    示例：
-    - 校验："BTCUSDT" 支持；"BTCUSD" 不支持。
+    获取支持的交易所列表。
+    
+    返回：交易所名称列表，如 ["Binance", "OKX", "Bybit", "NYSE", "NASDAQ"]
+    
+    说明：
+    - Binance, OKX, Bybit → 支持加密货币交易
+    - NYSE, NASDAQ → 支持股票交易，不支持加密货币
     """
-    return SUPPORTED_SYMBOLS
+    return list(EXCHANGE_PRODUCTS.keys())
+
+
+@tool  
+def list_products_by_exchange(exchange: str) -> List[str]:
+    """
+    根据交易所获取其支持的产品类型。
+    
+    参数：
+      - exchange: 交易所名称（如"Binance", "OKX", "NYSE"）
+    
+    返回：产品类型列表，如 ["spot", "contract"] 或 ["futures", "options"]
+    
+    产品类型说明：
+    - spot: 现货
+    - contract: 合约
+    - futures: 期货
+    - options: 期权
+    """
+    return EXCHANGE_PRODUCTS.get(exchange, [])
 
 
 @tool
-def list_timeframes() -> List[str]:
+def list_symbols_by_exchange(exchange: str) -> List[str]:
     """
-    获取支持的K线时间周期。
-    用途：用于校验 timeframe 是否在能力范围内。
-
-    返回：固定集合
-    ["1m","5m","15m","30m","1h","4h","1d","1w","1M"]
-
-    限制：仅支持上述集合；例如 "2m"、"3h" 不支持，应建议最近的可替代周期（如 1m 或 5m，1h 或 4h）。
+    根据交易所获取其支持的交易对列表。
+    
+    参数：
+      - exchange: 交易所名称
+    
+    返回：交易对列表，如 ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    
+    约束：
+    - NYSE、NASDAQ等股票交易所不支持加密货币交易对
+    - Binance、OKX等支持主流币种交易对
     """
-    return SUPPORTED_TIMEFRAMES
+    return []
+
+
+@tool
+def validate_exchange_product_symbol(exchange: str, product: str, symbol: str) -> bool:
+    """
+    验证交易所、产品类型和交易对的组合是否有效。
+    
+    参数：
+      - exchange: 交易所名称
+      - product: 产品类型（"spot"、"contract"等）
+      - symbol: 交易对（如"BTCUSDT"）
+    
+    返回：布尔值，True表示组合有效，False表示无效
+    
+    验证规则：
+    - NYSE/NASDAQ + 加密货币交易对 → False（股票交易所不支持加密货币）
+    - 正确组合 → True
+    """
+    return False
+
+
+
+
+
+
 
 
 # ============ 指标能力（仅定义参数与返回结构） ============
@@ -170,12 +198,55 @@ def indicator_boll(period: int, std: float) -> Dict[str, float]:
     raise NotImplementedError("能力定义占位：执行Agent中对接数据源后实现")
 
 
+@tool
+def get_kline_data(exchange: str, symbol: str, timeframe: str, limit: int) -> List[Dict[str, float]]:
+    """
+    获取K线数据。
+    
+    参数：
+      - exchange: 交易所名称
+      - symbol: 交易对
+      - timeframe: 时间周期
+      - limit: 获取数量
+    
+    返回：
+      - [{"time": int, "open": float, "high": float, "low": float, "close": float}, ...]
+    
+    适用：
+      - 获取历史数据进行指标计算
+      - 判断当前价格趋势
+    """
+    raise NotImplementedError("能力定义占位：执行Agent中对接数据源后实现")
+
+
+@tool
+def place_order(exchange: str, symbol: str, side: str, order_type: str, quantity: float, price: float = None) -> Dict[str, Any]:
+    """
+    执行下单操作。
+    
+    参数：
+      - exchange: 交易所
+      - symbol: 交易对
+      - side: "buy" 或 "sell"
+      - order_type: "market" (市价) 或 "limit" (限价)
+      - quantity: 数量
+      - price: 价格 (限价单必填)
+    
+    返回：
+      - {"order_id": str, "status": str}
+    """
+    raise NotImplementedError("能力定义占位：执行Agent中对接数据源后实现")
+
+
 # ============ 工具注册表（供 capability_manifest 自动提取信息） ============
 
 ALL_TOOLS: List[Any] = [
-    list_markets,
-    list_symbols,
-    list_timeframes,
+    list_exchanges,
+    list_products_by_exchange,
+    list_symbols_by_exchange,
+    validate_exchange_product_symbol,
+    get_kline_data,
+    place_order,
     indicator_ma,
     indicator_ema,
     indicator_rsi,

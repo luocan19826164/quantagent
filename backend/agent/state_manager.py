@@ -13,7 +13,8 @@ class QuantRuleState:
     
     def __init__(self):
         self.user_requirements: Dict[str, Any] = {
-            "market": None,  # 市场类型
+            "exchange": None,  # 交易所名称
+            "product": None,  # 产品类型（现货/合约/期货/期权）
             "symbols": [],  # 交易对列表
             "timeframe": None,  # K线周期
             "entry_rules": None,  # 建仓规则
@@ -21,7 +22,9 @@ class QuantRuleState:
             "take_profit": None,  # 止盈
             "stop_loss": None,  # 止损
             "max_position_ratio": None,  # 最大仓位比例
-            "other_conditions": []  # 其他条件
+            "other_conditions": [],  # 其他条件
+            "execute_plan": None,  # 根据用户的完善策略条件，模拟描述执行的步骤，伪代码一步步说明
+            "finish": False,  # 策略是否收集完成且可执行
         }
         
         self.execution_logic: Dict[str, Any] = {
@@ -65,11 +68,17 @@ class QuantRuleState:
     def check_completeness(self) -> tuple[bool, List[str]]:
         """
         检查规则完整性
+        
+        完整性判断标准：
+        1. 所有必填字段都已填写
+        2. finish 字段为 True（表示工具充足，策略可执行）
+        
         Returns:
-            (是否完整, 缺失字段列表)
+            (是否完整, 缺失字段列表或原因列表)
         """
         required_fields = {
-            "market": "市场类型",
+            "exchange": "交易所名称",
+            "product": "产品类型",
             "symbols": "交易对",
             "timeframe": "K线周期",
             "entry_rules": "建仓规则",
@@ -79,12 +88,21 @@ class QuantRuleState:
         }
         
         missing = []
+        
+        # 检查必填字段
         for field, label in required_fields.items():
             value = self.user_requirements[field]
             if value is None or (isinstance(value, list) and len(value) == 0):
                 missing.append(label)
         
-        is_complete = len(missing) == 0
+        # 检查 finish 字段
+        # 即使所有字段都填写了，如果 finish=false（工具不足），也不算完整
+        finish_status = self.user_requirements.get("finish", False)
+        if len(missing) == 0 and not finish_status:
+            # 字段都填写了，但工具不足
+            missing.append("系统工具不足（无法生成完整执行计划）")
+        
+        is_complete = len(missing) == 0 and finish_status
         self.metadata["is_complete"] = is_complete
         
         return is_complete, missing
@@ -107,10 +125,20 @@ class QuantRuleState:
         
         # 用户需求
         summary += "【用户需求】\n"
+        
+        # 产品类型映射
+        product_map = {
+            "spot": "现货",
+            "contract": "合约",
+            "futures": "期货",
+            "options": "期权"
+        }
+        
         for key, value in self.user_requirements.items():
             if value:
                 field_name = {
-                    "market": "市场类型",
+                    "exchange": "交易所",
+                    "product": "产品类型",
                     "symbols": "交易对",
                     "timeframe": "K线周期",
                     "entry_rules": "建仓规则",
@@ -118,13 +146,19 @@ class QuantRuleState:
                     "take_profit": "止盈",
                     "stop_loss": "止损",
                     "max_position_ratio": "最大仓位",
-                    "other_conditions": "其他条件"
+                    "other_conditions": "其他条件",
+                    "finish": "完成状态"
                 }.get(key, key)
+                
+                # 产品类型需要转换为中文显示
+                display_value = value
+                if key == "product" and value in product_map:
+                    display_value = product_map[value]
                 
                 if isinstance(value, list) and len(value) > 0:
                     summary += f"• {field_name}: {', '.join(map(str, value))}\n"
                 elif not isinstance(value, list):
-                    summary += f"• {field_name}: {value}\n"
+                    summary += f"• {field_name}: {display_value}\n"
         
         # 执行逻辑
         if self.execution_logic["indicators_used"]:

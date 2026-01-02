@@ -25,6 +25,26 @@ body {
     margin-bottom: 30px;
 }
 
+.header-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.user-controls {
+    display: flex;
+    align-items: center;
+}
+
+#userInfo {
+    font-weight: bold;
+    background: rgba(255, 255, 255, 0.2);
+    padding: 5px 10px;
+    border-radius: 4px;
+}
+
 .header h1 {
     font-size: 2.5rem;
     margin-bottom: 10px;
@@ -178,21 +198,37 @@ body {
 }
 
 .state-item {
-    margin-bottom: 15px;
-    padding: 12px;
+    margin-bottom: 2px;
+    padding: 2px 8px;
     background: #f8f9fa;
-    border-radius: 8px;
-    border-left: 4px solid #667eea;
+    border-radius: 4px;
+    border-left: 2px solid #667eea;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    flex-wrap: wrap;
+    /* 覆盖父级 .state-content 的 pre-wrap，避免多余空白导致视觉间距增大 */
+    white-space: normal;
 }
 
 .state-item-label {
     font-weight: bold;
     color: #667eea;
-    margin-bottom: 5px;
+    margin: 0;
+    padding: 0;
+    font-size: 11px;
+    line-height: 1.15;
+    flex: 0 0 auto;
 }
 
 .state-item-value {
     color: #333;
+    font-size: 11px;
+    line-height: 1.2;
+    margin: 0;
+    padding: 0;
+    flex: 1 1 auto;
+    word-break: break-word;
 }
 
 .state-loading {
@@ -451,5 +487,139 @@ body {
     .message-content {
         max-width: 85%;
     }
+    
+    .header-content {
+        flex-direction: column;
+        gap: 15px;
+    }
+}
+
+
+/* =========================================
+   认证与策略列表样式
+   ========================================= */
+
+.auth-modal-content {
+    max-width: 400px;
+    padding: 30px;
+}
+
+.auth-tabs {
+    display: flex;
+    margin-bottom: 25px;
+    border-bottom: 2px solid #f0f0f0;
+}
+
+.auth-tab {
+    flex: 1;
+    padding: 10px;
+    text-align: center;
+    background: none;
+    border: none;
+    font-size: 16px;
+    font-weight: bold;
+    color: #999;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.auth-tab.active {
+    color: #667eea;
+    border-bottom: 2px solid #667eea;
+    margin-bottom: -2px;
+}
+
+.auth-form .form-group {
+    margin-bottom: 20px;
+}
+
+.auth-form label {
+    display: block;
+    margin-bottom: 8px;
+    color: #555;
+    font-weight: 500;
+}
+
+.auth-form input {
+    width: 100%;
+    padding: 10px;
+    border: 2px solid #eee;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.3s;
+}
+
+.auth-form input:focus {
+    border-color: #667eea;
+    outline: none;
+}
+
+.full-width {
+    width: 100%;
+    margin-top: 10px;
+}
+
+/* 策略列表 */
+.rules-list {
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.no-data {
+    text-align: center;
+    color: #999;
+    padding: 40px;
+}
+
+.rule-card {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-left: 4px solid #667eea;
+    transition: transform 0.2s;
+}
+
+.rule-card:hover {
+    transform: translateX(5px);
+    background: #fff;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+}
+
+.rule-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: #666;
+}
+
+.rule-id {
+    font-weight: bold;
+    color: #333;
+}
+
+.rule-summary {
+    font-weight: bold;
+    color: #667eea;
+    margin-bottom: 8px;
+    font-size: 14px;
+}
+
+.rule-details {
+    font-size: 13px;
+    color: #555;
+    line-height: 1.5;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    color: white;
+}
+
+.btn-outline:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: white;
 }
 

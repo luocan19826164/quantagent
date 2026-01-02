@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -5,10 +6,31 @@ __pycache__/
 .Python
 env/
 venv/
-.venv/
-.env
-*.log
-.DS_Store
-sessions/
-*.json
+ENV/
+build/
+dist/
+*.egg-info/
 
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+# 保留 .vscode/ 配置以确保团队统一开发环境
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+app.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/

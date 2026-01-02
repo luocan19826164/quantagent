@@ -7,9 +7,35 @@ from flask import Flask, request, jsonify, render_template, session
 from flask_cors import CORS
 import uuid
 import os
+import logging
 from dotenv import load_dotenv
 
 from agent import SessionManager, QuantRuleCollectorAgent
+import database  # 引入数据库模块
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+
+# 支持的模型配置
+SUPPORTED_MODELS = {
+    "openai": {
+        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"],
+        "api_key_env": "OPENAI_API_KEY",
+        "base_url": "https://api.openai.com/v1"
+    },
+    "deepseek": {
+        "models": ["deepseek-chat", "deepseek-coder"],
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com/v1"
+    }
+}
 
 load_dotenv()
 
@@ -240,17 +266,241 @@ def get_markets():
     })
 
 
+@app.route('/api/models', methods=['GET'])
+def get_available_models():
+    """获取所有可用的模型列表"""
+    models = []
+    for provider, config in SUPPORTED_MODELS.items():
+        models.append({
+            "provider": provider,
+            "models": config["models"],
+            "base_url": config["base_url"]
+        })
+    return jsonify({
+        "success": True,
+        "models": models
+    })
+
+
+@app.route('/api/switch-model/<session_id>', methods=['POST'])
+def switch_model(session_id):
+    """切换模型"""
+    try:
+        data = request.json
+        provider = data.get('provider')
+        model_name = data.get('model')
+        
+        if not provider or not model_name:
+            return jsonify({
+                "success": False,
+                "error": "缺少provider或model参数"
+            }), 400
+        
+        # 验证模型
+        if provider not in SUPPORTED_MODELS:
+            return jsonify({
+                "success": False,
+                "error": f"不支持的提供商: {provider}"
+            }), 400
+        
+        if model_name not in SUPPORTED_MODELS[provider]["models"]:
+            return jsonify({
+                "success": False,
+                "error": f"不支持的模型: {model_name}"
+            }), 400
+        
+        # 获取Agent
+        agent = agent_cache.get(session_id)
+        if not agent:
+            return jsonify({
+                "success": False,
+                "error": "会话不存在"
+            }), 404
+        
+        # 获取API密钥
+        provider_config = SUPPORTED_MODELS[provider]
+        api_key = os.getenv(provider_config["api_key_env"])
+        if not api_key:
+            return jsonify({
+                "success": False,
+                "error": f"未配置{provider_config['api_key_env']}环境变量"
+            }), 400
+        
+        # 切换模型
+        base_url = provider_config["base_url"]
+        agent.switch_model(model_name, api_key, base_url)
+        
+        return jsonify({
+            "success": True,
+            "message": f"已切换模型到 {model_name}",
+            "current_model": agent.get_current_model_info()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/api/model-info/<session_id>', methods=['GET'])
+def get_model_info(session_id):
+    """获取当前使用的模型信息"""
+    try:
+        agent = agent_cache.get(session_id)
+        if not agent:
+            return jsonify({
+                "success": False,
+                "error": "会话不存在"
+            }), 404
+        
+        return jsonify({
+            "success": True,
+            "model_info": agent.get_current_model_info()
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+# ==========================================
+# 用户认证与规则保存 API
+# ==========================================
+
+@app.route('/api/register', methods=['POST'])
+def register():
+    """用户注册"""
+    try:
+        data = request.json
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({"success": False, "error": "用户名和密码不能为空"}), 400
+            
+        user_id = database.create_user(username, password)
+        if not user_id:
+            return jsonify({"success": False, "error": "用户名已存在"}), 400
+            
+        # 注册成功自动登录
+        session['user_id'] = user_id
+        session['username'] = username
+        
+        return jsonify({
+            "success": True, 
+            "message": "注册成功",
+            "user": {"id": user_id, "username": username}
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    """用户登录"""
+    try:
+        data = request.json
+        username = data.get('username')
+        password = data.get('password')
+        
+        user = database.verify_user(username, password)
+        if not user:
+            return jsonify({"success": False, "error": "用户名或密码错误"}), 401
+            
+        session['user_id'] = user['id']
+        session['username'] = user['username']
+        
+        return jsonify({
+            "success": True, 
+            "message": "登录成功",
+            "user": {"id": user['id'], "username": user['username']}
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/check_status', methods=['GET'])
+def check_status():
+    """检查登录状态"""
+    if 'user_id' in session:
+        return jsonify({
+            "success": True, 
+            "is_logged_in": True,
+            "user": {"id": session['user_id'], "username": session['username']}
+        })
+    return jsonify({"success": True, "is_logged_in": False})
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    """退出登录"""
+    session.clear()
+    return jsonify({"success": True, "message": "已退出登录"})
+
+@app.route('/api/save_rule', methods=['POST'])
+def save_rule_api():
+    """保存规则"""
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+        
+    try:
+        data = request.json
+        # 支持直接传全部规则，或者只传session_id让后端去取
+        rule_content = data.get('rule_content')
+        session_id = data.get('session_id')
+        
+        if not rule_content and session_id:
+            # 如果只传了session_id，尝试从内存获取当前状态
+            state = session_manager.get_session(session_id)
+            if state:
+                rule_content = state.to_dict()
+        
+        if not rule_content:
+            return jsonify({"success": False, "error": "缺少规则内容"}), 400
+            
+        rule_id = database.save_rule(session['user_id'], rule_content)
+        if not rule_id:
+            return jsonify({"success": False, "error": "保存失败"}), 500
+            
+        return jsonify({
+            "success": True, 
+            "message": "规则保存成功",
+            "rule_id": rule_id
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/my_rules', methods=['GET'])
+def get_my_rules():
+    """获取我的规则列表"""
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+        
+    try:
+        rules = database.get_user_rules(session['user_id'])
+        return jsonify({"success": True, "rules": rules})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 if __name__ == '__main__':
     print("=" * 60)
     print("🚀 量化规则收集 Agent 启动中...")
     print("=" * 60)
-    print(f"📍 访问地址: http://localhost:8080")
-    print(f"📊 API文档: http://localhost:8080/api/indicators")
+    print(f"📍 访问地址: http://localhost:8081")
+    print(f"📊 API文档: http://localhost:8081/api/indicators")
+    
+    # 初始化数据库
+    try:
+        database.init_db()
+        print("💾 数据库初始化成功 (quant.db)")
+    except Exception as e:
+        print(f"❌ 数据库初始化失败: {e}")
+        
     print("=" * 60)
     
     app.run(
         host='0.0.0.0',
-        port=8080,
+        port=8081,
         debug=True
     )
 

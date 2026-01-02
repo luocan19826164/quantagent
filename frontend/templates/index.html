@@ -9,9 +9,20 @@
 <body>
     <div class="container">
         <!-- 头部 -->
+        <!-- 头部 -->
         <header class="header">
-            <h1>🤖 量化规则收集 Agent</h1>
-            <p class="subtitle">通过对话完善你的量化交易策略</p>
+            <div class="header-content">
+                <div>
+                    <h1>🤖 量化规则收集 Agent</h1>
+                    <p class="subtitle">通过对话完善你的量化交易策略</p>
+                </div>
+                <div class="user-controls">
+                    <span id="userInfo" style="display: none; margin-right: 15px;"></span>
+                    <button id="authBtn" class="btn btn-secondary" onclick="showAuthModal()">登录 / 注册</button>
+                    <button id="myRulesBtn" class="btn btn-outline" style="display: none;" onclick="showMyRules()">我的策略</button>
+                    <button id="logoutBtn" class="btn btn-outline" style="display: none;" onclick="logout()">退出</button>
+                </div>
+            </div>
         </header>
 
         <!-- 主要内容区 -->
@@ -20,7 +31,16 @@
             <div class="chat-section">
                 <div class="chat-header">
                     <h2>💬 对话区</h2>
-                    <button id="resetBtn" class="btn btn-secondary">重置会话</button>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <select id="modelSelector" style="padding: 8px 12px; border-radius: 6px; border: 1px solid #e0e0e0; font-size: 14px;">
+                            <option value="deepseek:deepseek-chat" selected>DeepSeek Chat</option>
+                            <option value="deepseek:deepseek-coder">DeepSeek Coder</option>
+                            <option value="openai:gpt-4o-mini">GPT-4o Mini</option>
+                            <option value="openai:gpt-4o">GPT-4o</option>
+                            <option value="openai:gpt-4-turbo">GPT-4 Turbo</option>
+                        </select>
+                        <button id="resetBtn" class="btn btn-secondary">重置会话</button>
+                    </div>
                 </div>
                 
                 <div id="chatMessages" class="chat-messages">
@@ -55,9 +75,14 @@
                     <div class="state-loading">等待收集信息...</div>
                 </div>
                 
-                <button id="finalizeBtn" class="btn btn-success" style="width: 100%; margin-top: 15px;" disabled>
-                    生成最终规则
-                </button>
+                <div style="display: flex; gap: 10px; margin-top: 15px;">
+                    <button id="saveRuleBtn" class="btn btn-primary" style="flex: 1;" disabled onclick="saveRule()">
+                        💾 保存策略
+                    </button>
+                    <button id="finalizeBtn" class="btn btn-success" style="flex: 1;" disabled>
+                        ⚡️ 生成最终规则
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -85,6 +110,59 @@
                 <div class="modal-actions">
                     <button onclick="downloadRules()" class="btn btn-primary">下载配置</button>
                     <button onclick="copyRules()" class="btn btn-secondary">复制JSON</button>
+                </div>
+            </div>
+        </div>
+        </div>
+    </div>
+
+    <!-- 登录/注册 模态框 -->
+    <div id="authModal" class="modal">
+        <div class="modal-content auth-modal-content">
+            <span class="close" onclick="closeAuthModal()">&times;</span>
+            <div class="auth-tabs">
+                <button class="auth-tab active" onclick="switchAuthMode('login')">登录</button>
+                <button class="auth-tab" onclick="switchAuthMode('register')">注册</button>
+            </div>
+            
+            <!-- 登录表单 -->
+            <div id="loginForm" class="auth-form">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="loginUsername" placeholder="请输入用户名">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="loginPassword" placeholder="请输入密码">
+                </div>
+                <button class="btn btn-primary full-width" onclick="performLogin()">登录</button>
+            </div>
+            
+            <!-- 注册表单 -->
+            <div id="registerForm" class="auth-form" style="display: none;">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="regUsername" placeholder="设置用户名">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="regPassword" placeholder="设置密码">
+                </div>
+                <button class="btn btn-success full-width" onclick="performRegister()">注册并自动登录</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 我的策略列表 模态框 -->
+    <div id="myRulesModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h2>📚 我的策略库</h2>
+                <span class="close" onclick="closeMyRulesModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div id="rulesList" class="rules-list">
+                    <div class="loading">加载中...</div>
                 </div>
             </div>
         </div>

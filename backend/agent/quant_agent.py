@@ -9,7 +9,10 @@ from langchain.memory import ConversationBufferMemory
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from .state_manager import QuantRuleState
 from .capability_manifest import get_capability_manifest_text
+from .prompt_loader import get_prompt_loader
 import os
+import json
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,12 +29,18 @@ class QuantRuleCollectorAgent:
             output_key="output"
         )
         
-        # 初始化LLM
+        # 当前使用的模型信息
+        self.current_model = os.getenv("MODEL_NAME", "gpt-4o-mini")
+        self.current_api_key = os.getenv("OPENAI_API_KEY")
+        self.current_base_url = os.getenv("OPENAI_BASE_URL")
+        
+        # 初始化LLM (启用JSON模式)
         self.llm = ChatOpenAI(
-            model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
+            model=self.current_model,
             temperature=0.7,
-            api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_BASE_URL")
+            api_key=self.current_api_key,
+            base_url=self.current_base_url,
+            model_kwargs={"response_format": {"type": "json_object"}}
         )
         
         # 创建对话提示模板（无工具执行）
@@ -39,63 +48,15 @@ class QuantRuleCollectorAgent:
     
     def _create_prompt(self) -> ChatPromptTemplate:
         """创建无工具执行的提示模板，并注入能力清单（仅作为判断依据）。"""
+        # 从配置文件加载prompt
+        prompt_loader = get_prompt_loader()
         capability_text = get_capability_manifest_text()
-        # 转义花括号，避免被 ChatPromptTemplate 误认为变量占位符
-        capability_text = capability_text.replace("{", "{{").replace("}", "}}")
-        # 定义输出schema并转义
-        output_schema = (
-            '{\n'
-            '  "reply": "给用户的自然语言回复",\n'
-            '  "state_update": {\n'
-            '    "market": null,\n'
-            '    "symbols": [],\n'
-            '    "timeframe": null,\n'
-            '    "entry_rules": null,\n'
-            '    "take_profit": null,\n'
-            '    "stop_loss": null,\n'
-            '    "max_position_ratio": null,\n'
-            '    "indicators_required": [],\n'
-            '    "feasible": false,\n'
-            '    "reasons": "",\n'
-            '    "missing_fields": []\n'
-            '  }\n'
-            '}'
-        )
-        output_schema = output_schema.replace("{", "{{").replace("}", "}}")
         
-        system_prompt = f"""你是一个专业的量化交易策略顾问，你的任务是通过多轮对话帮助用户完善他们的量化交易策略。
-
-你的职责：
-1. 理解用户的策略想法，判断是否可以用【以下能力清单】实现。注意：这些能力仅用于判断与约束，你不能也无需返回任何工具调用或action。
-2. 如果可以实现，引导用户逐步完善策略细节
-3. 如果不能实现，友好地提示用户调整需求，建议在现有能力范围内的替代方案
-4. 必须收集的关键信息：
-   - 市场类型（现货/合约/期货/期权）
-   - 交易对列表（具体的币种）
-   - K线时间周期（1分钟/5分钟/1小时/日线等）
-   - 建仓规则（什么条件下开仓）
-   - 止盈规则（达到什么条件止盈）
-   - 止损规则（达到什么条件止损）
-   - 最大仓位比例（单次最大投入资金比例）
-
-对话风格：
-- 专业但友好，循序渐进
-- 每次只问1-2个关键问题，不要一次问太多
-- 用例子帮助用户理解
-- 当用户描述不清楚时，给出具体的选项供选择
-- 定期总结已收集的信息
-
-【能力清单（仅用于判断，不可调用工具）】
-{capability_text}
-
-当你认为信息收集完整时，明确告知用户，并询问是否需要调整。
-
-当前状态总结：
-{{state_summary}}
-
-输出格式（必须返回可被JSON解析；不要返回工具调用或action）：
-{output_schema}
-"""
+        # 构建系统提示词
+        system_prompt = prompt_loader.build_system_prompt(
+            capability_text=capability_text,
+            state_summary=""
+        )
         
         # 创建提示模板
         prompt = ChatPromptTemplate.from_messages([
@@ -132,15 +93,18 @@ class QuantRuleCollectorAgent:
             output_text = raw.content if hasattr(raw, "content") else str(raw)
             
             # 解析期望JSON
-            import json
             reply = ""
             state_update: Dict[str, Any] = {}
             try:
                 parsed = json.loads(output_text)
                 reply = parsed.get("reply", "")
                 state_update = parsed.get("state_update", {})
-            except Exception:
+                # 添加调试日志
+                logging.info(f"AI返回的state_update: {state_update}")
+            except Exception as e:
                 # 兜底：将文本作为回复，同时启用关键词提取辅助更新
+                logging.error(f"JSON解析失败: {e}")
+                logging.error(f"AI原始输出: {output_text[:500]}")
                 reply = output_text
                 state_update = {}
             
@@ -175,106 +139,112 @@ class QuantRuleCollectorAgent:
             }
     
     def _update_state_from_conversation(self, user_input: str, agent_response: str):
-        """从对话中提取信息更新状态"""
-        combined_text = (user_input + " " + agent_response).lower()
-        
-        # 提取市场类型
-        markets = ["现货", "合约", "期货", "期权"]
-        for market in markets:
-            if market in combined_text:
-                self.state.update_requirement("market", market)
-                break
-        
-        # 提取时间周期
-        timeframes = ["1分钟", "5分钟", "15分钟", "30分钟", "1小时", "4小时", "日线", "周线", "月线"]
-        timeframe_map = {
-            "1分钟": "1m", "5分钟": "5m", "15分钟": "15m", "30分钟": "30m",
-            "1小时": "1h", "4小时": "4h", "日线": "1d", "周线": "1w", "月线": "1M"
-        }
-        for tf_label, tf_value in timeframe_map.items():
-            if tf_label in user_input or tf_value in user_input:
-                self.state.update_requirement("timeframe", tf_value)
-                break
-        
-        # 提取指标
-        indicators = ["MA", "EMA", "RSI", "MACD", "BOLL", "KDJ", "ATR", "VOLUME", "OBV", "SAR"]
-        for indicator in indicators:
-            if indicator.lower() in combined_text or self._get_chinese_name(indicator) in user_input:
-                self.state.add_indicator_used(indicator)
-        
-        # 提取交易对
-        symbols = ["BTC", "ETH", "BNB", "ADA", "DOGE", "SOL", "XRP", "DOT", "MATIC", "LINK"]
-        found_symbols = []
-        for symbol in symbols:
-            if symbol.lower() in combined_text:
-                found_symbols.append(f"{symbol}USDT")
-        if found_symbols:
-            current_symbols = self.state.user_requirements.get("symbols", [])
-            updated_symbols = list(set(current_symbols + found_symbols))
-            self.state.update_requirement("symbols", updated_symbols)
-        
-        # 提取建仓规则
-        if any(keyword in user_input for keyword in ["建仓", "买入", "入场", "开仓", "做多", "做空"]):
-            # 提取包含这些关键词的句子作为规则
-            self.state.update_requirement("entry_rules", user_input)
-        
-        # 提取止盈止损
-        if "止盈" in user_input or "获利" in user_input:
-            # 尝试提取百分比
-            import re
-            match = re.search(r'(\d+(?:\.\d+)?)\s*%', user_input)
-            if match:
-                self.state.update_requirement("take_profit", f"{match.group(1)}%")
-        
-        if "止损" in user_input or "停损" in user_input:
-            import re
-            match = re.search(r'(\d+(?:\.\d+)?)\s*%', user_input)
-            if match:
-                self.state.update_requirement("stop_loss", f"{match.group(1)}%")
-        
-        # 提取仓位比例
-        if "仓位" in user_input or "资金" in user_input:
-            import re
-            match = re.search(r'(\d+(?:\.\d+)?)\s*%', user_input)
-            if match:
-                ratio = float(match.group(1)) / 100
-                self.state.update_requirement("max_position_ratio", ratio)
-    
-    def _get_chinese_name(self, indicator: str) -> str:
-        """获取指标的中文名称"""
-        names = {
-            "MA": "均线",
-            "EMA": "指数均线",
-            "RSI": "相对强弱",
-            "MACD": "指数平滑",
-            "BOLL": "布林带",
-            "KDJ": "随机指标",
-            "ATR": "波幅",
-            "VOLUME": "成交量"
-        }
-        return names.get(indicator, indicator)
+        """轻量兜底：当AI未返回有效state_update时记录日志"""
+        logging.warning(
+            f"AI未返回有效的state_update，建议优化prompt。"
+            f"用户输入: {user_input[:100]}{'...' if len(user_input) > 100 else ''}"
+        )
+        # 不做硬编码提取，完全依赖AI的理解能力
+        # 如果频繁触发这个警告，说明需要优化prompt或检查AI输出格式
     
     def _apply_state_update(self, su: Dict[str, Any]):
-        """将模型返回的 state_update 应用到当前状态。"""
+        """将模型返回的 state_update 应用到当前状态，并进行基本的格式验证。"""
         if not su:
             return
-        if su.get("market"):
-            self.state.update_requirement("market", su["market"])
+        
+        # 交易所验证
+        if su.get("exchange"):
+            valid_exchanges = ["Binance", "OKX", "Bybit", "NYSE", "NASDAQ", "Coinbase", "Kraken"]
+            if su["exchange"] in valid_exchanges:
+                self.state.update_requirement("exchange", su["exchange"])
+            else:
+                logging.warning(f"无效的交易所: {su['exchange']}")
+        
+        # 产品类型验证（验证与交易所的兼容性）
+        if su.get("product"):
+            from .tools_catalog import EXCHANGE_PRODUCTS
+            exchange = self.state.user_requirements.get("exchange")
+            
+            if exchange and exchange in EXCHANGE_PRODUCTS:
+                # 检查该交易所是否支持该产品
+                if su["product"] in EXCHANGE_PRODUCTS[exchange]:
+                    self.state.update_requirement("product", su["product"])
+                else:
+                    logging.warning(f"交易所 {exchange} 不支持产品 {su['product']}")
+            else:
+                # 没有交易所时，先保存
+                valid_products = ["spot", "contract", "futures", "options"]
+                if su["product"] in valid_products:
+                    self.state.update_requirement("product", su["product"])
+                else:
+                    logging.warning(f"无效的产品类型: {su['product']}")
+        
+        # 交易对验证（数组累加）
         if su.get("symbols"):
-            self.state.update_requirement("symbols", su["symbols"])
+            exchange = self.state.user_requirements.get("exchange")
+            
+            # 验证交易对格式（简单验证）
+            if exchange in ["NYSE", "NASDAQ"]:
+                # 股票交易所不支持USDT交易对
+                filtered_symbols = [s for s in su["symbols"] if "USDT" not in s]
+                if filtered_symbols != su["symbols"]:
+                    logging.warning(f"股票交易所 {exchange} 不支持加密货币交易对，已过滤")
+                su["symbols"] = filtered_symbols
+            
+            current_symbols = self.state.user_requirements.get("symbols", [])
+            # 合并去重
+            updated_symbols = list(set(current_symbols + su["symbols"]))
+            self.state.update_requirement("symbols", updated_symbols)
+        
+        # K线周期验证
         if su.get("timeframe"):
-            self.state.update_requirement("timeframe", su["timeframe"])
+            valid_timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"]
+            if su["timeframe"] in valid_timeframes:
+                self.state.update_requirement("timeframe", su["timeframe"])
+            else:
+                logging.warning(f"无效的时间周期: {su['timeframe']}")
+        
+        # 建仓规则
         if su.get("entry_rules"):
             self.state.update_requirement("entry_rules", su["entry_rules"])
+        
+        # 止盈规则
         if su.get("take_profit"):
             self.state.update_requirement("take_profit", su["take_profit"])
+        
+        # 止损规则
         if su.get("stop_loss"):
             self.state.update_requirement("stop_loss", su["stop_loss"])
+        
+        # 仓位比例验证
         if su.get("max_position_ratio") is not None:
-            self.state.update_requirement("max_position_ratio", su["max_position_ratio"])
+            ratio = su["max_position_ratio"]
+            if isinstance(ratio, (int, float)) and 0 < ratio <= 1:
+                self.state.update_requirement("max_position_ratio", ratio)
+            else:
+                logging.warning(f"无效的仓位比例: {ratio}，应该在0-1之间")
+        
+        # 指标验证（数组累加）
         if su.get("indicators_required"):
+            valid_indicators = ["MA", "EMA", "RSI", "MACD", "BOLL", "KDJ", "ATR", "VOLUME", "OBV", "SAR"]
             for ind in su["indicators_required"]:
-                self.state.add_indicator_used(ind)
+                if ind in valid_indicators:
+                    self.state.add_indicator_used(ind)
+                else:
+                    logging.warning(f"无效的指标: {ind}")
+        
+        # 执行计划（仅在策略完善后生成）
+        if su.get("execute_plan"):
+            self.state.update_requirement("execute_plan", su["execute_plan"])
+            logging.info(f"已生成执行计划，长度: {len(su['execute_plan'])} 字符")
+        
+        # finish 字段（标识策略是否完整可执行）
+        if "finish" in su:
+            self.state.update_requirement("finish", su["finish"])
+            if su["finish"]:
+                logging.info("策略收集完成且可执行")
+            else:
+                logging.info("策略信息收集中或工具不足")
 
     def get_final_rules(self) -> Dict[str, Any]:
         """获取最终的规则配置"""
@@ -284,4 +254,35 @@ class QuantRuleCollectorAgent:
         """重置Agent"""
         self.memory.clear()
         self.state = QuantRuleState()
+    
+    def switch_model(self, model_name: str, api_key: str, base_url: str = None):
+        """
+        切换模型，保持上下文和历史记录不变
+        
+        Args:
+            model_name: 新的模型名称
+            api_key: API密钥
+            base_url: API基础URL（可选）
+        """
+        # 更新模型信息
+        self.current_model = model_name
+        self.current_api_key = api_key
+        self.current_base_url = base_url
+        
+        # 重新创建LLM实例（memory和state保持不变）
+        self.llm = ChatOpenAI(
+            model=self.current_model,
+            temperature=0.7,
+            api_key=self.current_api_key,
+            base_url=self.current_base_url,
+            model_kwargs={"response_format": {"type": "json_object"}}
+        )
+    
+    def get_current_model_info(self) -> Dict[str, Any]:
+        """获取当前模型信息"""
+        return {
+            "model": self.current_model,
+            "api_key_set": bool(self.current_api_key),
+            "base_url": self.current_base_url
+        }
 
