@@ -1,101 +1,134 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>量化规则收集 Agent</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-    <div class="container">
-        <!-- 头部 -->
-        <!-- 头部 -->
-        <header class="header">
-            <div class="header-content">
-                <div>
-                    <h1>🤖 量化规则收集 Agent</h1>
-                    <p class="subtitle">通过对话完善你的量化交易策略</p>
-                </div>
-                <div class="user-controls">
-                    <span id="userInfo" style="display: none; margin-right: 15px;"></span>
-                    <button id="authBtn" class="btn btn-secondary" onclick="showAuthModal()">登录 / 注册</button>
-                    <button id="myRulesBtn" class="btn btn-outline" style="display: none;" onclick="showMyRules()">我的策略</button>
-                    <button id="logoutBtn" class="btn btn-outline" style="display: none;" onclick="logout()">退出</button>
-                </div>
-            </div>
-        </header>
 
-        <!-- 主要内容区 -->
-        <div class="main-content">
-            <!-- 聊天区域 -->
-            <div class="chat-section">
-                <div class="chat-header">
-                    <h2>💬 对话区</h2>
-                    <div style="display: flex; gap: 10px; align-items: center;">
-                        <select id="modelSelector" style="padding: 8px 12px; border-radius: 6px; border: 1px solid #e0e0e0; font-size: 14px;">
-                            <option value="deepseek:deepseek-chat" selected>DeepSeek Chat</option>
-                            <option value="deepseek:deepseek-coder">DeepSeek Coder</option>
-                            <option value="openai:gpt-4o-mini">GPT-4o Mini</option>
-                            <option value="openai:gpt-4o">GPT-4o</option>
-                            <option value="openai:gpt-4-turbo">GPT-4 Turbo</option>
-                        </select>
-                        <button id="resetBtn" class="btn btn-secondary">重置会话</button>
+<body>
+    <div class="app-wrapper">
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <div class="sidebar-logo">
+                <span class="logo-icon">📈</span>
+                <span class="logo-text">QuantAgent</span>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" id="navRuleCollector" onclick="switchAgent('collector')">
+                    <span class="nav-icon">🤖</span>
+                    <span class="nav-text">规则收集</span>
+                </a>
+                <a href="#" class="nav-item" id="navRuleExecutor" onclick="switchAgent('executor')">
+                    <span class="nav-icon">⚡</span>
+                    <span class="nav-text">规则执行</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div id="userInfoHeader" class="user-info-mini"></div>
+            </div>
+        </aside>
+
+        <div class="container">
+            <!-- 头部 -->
+            <!-- 头部 -->
+            <header class="header">
+                <div class="header-content">
+                    <div>
+                        <h1>🤖 量化规则收集 Agent</h1>
+                        <p class="subtitle">通过对话完善你的量化交易策略</p>
+                    </div>
+                    <div class="user-controls">
+                        <div class="model-and-actions" id="headerModelActions">
+                            <select id="modelSelector" class="model-selector header-select">
+                                <option value="deepseek:deepseek-chat">DeepSeek Chat (V3)</option>
+                                <option value="openai:gpt-4o">GPT-4o</option>
+                                <option value="openai:gpt-4o-mini">GPT-4o-mini</option>
+                            </select>
+                            <button id="resetBtn" class="btn-icon header-icon" title="重置会话">🔄</button>
+                        </div>
+                        <span id="userInfo" style="display: none; margin-right: 15px;"></span>
+                        <button id="authBtn" class="btn btn-secondary" onclick="showAuthModal()">登录 / 注册</button>
+                        <button id="myRulesBtn" class="btn btn-outline" style="display: none;"
+                            onclick="showMyRules()">我的策略</button>
+                        <button id="logoutBtn" class="btn btn-outline" style="display: none;"
+                            onclick="logout()">退出</button>
                     </div>
                 </div>
-                
-                <div id="chatMessages" class="chat-messages">
-                    <div class="message bot-message">
-                        <div class="message-content">
-                            <div class="loading">初始化中...</div>
+            </header>
+
+            <!-- 主要内容区 (Collector View) -->
+            <div class="main-content" id="collectorView">
+                <div class="chat-section">
+                    <div id="chatMessages" class="chat-messages"></div>
+                    <div class="chat-input-area">
+                        <div class="input-wrapper">
+                            <textarea id="userInput" placeholder="描述你的策略，例如：'我想做一个均线金叉策略'..." rows="3"></textarea>
+                            <button id="sendBtn" class="send-btn">
+                                <span class="send-icon">↗️</span>
+                            </button>
                         </div>
                     </div>
                 </div>
-                
-                <div class="chat-input-container">
-                    <textarea 
-                        id="userInput" 
-                        class="chat-input" 
-                        placeholder="在这里描述你的策略想法..."
-                        rows="3"
-                    ></textarea>
-                    <button id="sendBtn" class="btn btn-primary">发送</button>
-                </div>
-            </div>
 
-            <!-- 状态面板 -->
-            <div class="state-section">
-                <div class="state-header">
-                    <h2>📋 规则状态</h2>
-                    <div id="completenessIndicator" class="completeness-indicator incomplete">
-                        未完成
+                <div class="state-section">
+                    <div class="state-header">
+                        <h3>📋 策略状态</h3>
+                        <div id="completenessIndicator" class="completeness-indicator incomplete">⚠️ 未完成</div>
+                    </div>
+                    <div id="stateContent" class="state-content">
+                        <div class="state-loading">等待收集信息...</div>
+                    </div>
+                    <div class="state-actions">
+                        <button id="saveRuleBtn" class="btn btn-primary full-width" disabled onclick="saveRule()">✅
+                            保存并开始执行</button>
                     </div>
                 </div>
-                
-                <div id="stateContent" class="state-content">
-                    <div class="state-loading">等待收集信息...</div>
-                </div>
-                
-                <div style="display: flex; gap: 10px; margin-top: 15px;">
-                    <button id="saveRuleBtn" class="btn btn-primary" style="flex: 1;" disabled onclick="saveRule()">
-                        💾 保存策略
-                    </button>
-                    <button id="finalizeBtn" class="btn btn-success" style="flex: 1;" disabled>
-                        ⚡️ 生成最终规则
-                    </button>
-                </div>
             </div>
-        </div>
 
-        <!-- 指标参考 -->
-        <div class="indicators-section collapsed">
-            <div class="indicators-header" onclick="toggleIndicators()">
-                <h3>📊 可用技术指标 <span class="toggle-icon">▼</span></h3>
+            <!-- 执行Agent页面 (默认隐藏) -->
+            <div id="executorView" class="main-content" style="display: none;">
+                <!-- 左侧：策略列表 -->
+                <div class="rules-execution-section">
+                    <div class="section-header">
+                        <h2>📚 运行中的策略</h2>
+                    </div>
+                    <div id="executionRulesList" class="execution-rules-grid">
+                        <div class="loading">正在加载您的策略...</div>
+                    </div>
+                </div>
+
+                <!-- 右侧：订单历史 -->
+                <div class="orders-section">
+                    <div class="section-header">
+                        <h2>📝 订单历史</h2>
+                    </div>
+                    <div id="ordersList" class="orders-table-container">
+                        <table class="orders-table">
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>交易对</th>
+                                    <th>方向</th>
+                                    <th>价格</th>
+                                    <th>数量</th>
+                                    <th>盈亏</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ordersTableBody">
+                                <tr>
+                                    <td colspan="6" class="no-data">暂无订单数据</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
-            <div id="indicatorsContent" class="indicators-content" style="display: none;">
-                <div class="loading">加载中...</div>
-            </div>
-        </div>
-    </div>
+
+        </div> <!-- container end -->
+    </div> <!-- app-wrapper end -->
 
     <!-- 最终规则弹窗 -->
     <div id="finalRulesModal" class="modal">
@@ -113,7 +146,6 @@
                 </div>
             </div>
         </div>
-        </div>
     </div>
 
     <!-- 登录/注册 模态框 -->
@@ -124,7 +156,7 @@
                 <button class="auth-tab active" onclick="switchAuthMode('login')">登录</button>
                 <button class="auth-tab" onclick="switchAuthMode('register')">注册</button>
             </div>
-            
+
             <!-- 登录表单 -->
             <div id="loginForm" class="auth-form">
                 <div class="form-group">
@@ -137,7 +169,7 @@
                 </div>
                 <button class="btn btn-primary full-width" onclick="performLogin()">登录</button>
             </div>
-            
+
             <!-- 注册表单 -->
             <div id="registerForm" class="auth-form" style="display: none;">
                 <div class="form-group">
@@ -170,5 +202,5 @@
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
-</html>
 
+</html>

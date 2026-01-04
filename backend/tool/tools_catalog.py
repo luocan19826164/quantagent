@@ -9,6 +9,7 @@
 
 from typing import List, Dict, Any
 from langchain.tools import tool
+from .binance.client import get_binance_client
 
 # ============ 能力常量 ============
 
@@ -75,6 +76,9 @@ def list_symbols_by_exchange(exchange: str) -> List[str]:
     - NYSE、NASDAQ等股票交易所不支持加密货币交易对
     - Binance、OKX等支持主流币种交易对
     """
+    # 暂时固定返回一些主流币对，未来可对接真实的 list_symbols
+    if exchange == "Binance":
+        return ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
     return []
 
 
@@ -89,12 +93,17 @@ def validate_exchange_product_symbol(exchange: str, product: str, symbol: str) -
       - symbol: 交易对（如"BTCUSDT"）
     
     返回：布尔值，True表示组合有效，False表示无效
-    
-    验证规则：
-    - NYSE/NASDAQ + 加密货币交易对 → False（股票交易所不支持加密货币）
-    - 正确组合 → True
     """
-    return False
+    supported_products = EXCHANGE_PRODUCTS.get(exchange, [])
+    if product not in supported_products:
+        return False
+    
+    # 简单的白名单验证
+    valid_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "ADAUSDT"]
+    if symbol not in valid_symbols:
+        return False
+        
+    return True
 
 
 
@@ -120,7 +129,7 @@ def indicator_ma(period: int) -> float:
     示例：
       - 价格突破 MA(30) 视为看多信号。
     """
-    raise NotImplementedError("能力定义占位：执行Agent中对接数据源后实现")
+    raise NotImplementedError("指标计算由LLM自行分析历史K线数据完成，此处仅为能力定义")
 
 
 @tool
@@ -138,7 +147,7 @@ def indicator_ema(period: int) -> float:
     示例：
       - EMA(12) 向上穿越 EMA(26) 视为金叉。
     """
-    raise NotImplementedError("能力定义占位：执行Agent中对接数据源后实现")
+    raise NotImplementedError("指标计算由LLM自行分析历史K线数据完成，此处仅为能力定义")
 
 
 @tool
@@ -156,7 +165,7 @@ def indicator_rsi(period: int) -> float:
     示例：
       - RSI(14) < 30 视为超卖。
     """
-    raise NotImplementedError("能力定义占位：执行Agent中对接数据源后实现")
+    raise NotImplementedError("指标计算由LLM自行分析历史K线数据完成，此处仅为能力定义")
 
 
 @tool
@@ -176,7 +185,7 @@ def indicator_macd(fast: int, slow: int, signal: int) -> Dict[str, float]:
     示例：
       - DIF 上穿 DEA 视为金叉。
     """
-    raise NotImplementedError("能力定义占位：执行Agent中对接数据源后实现")
+    raise NotImplementedError("指标计算由LLM自行分析历史K线数据完成，此处仅为能力定义")
 
 
 @tool
@@ -195,28 +204,27 @@ def indicator_boll(period: int, std: float) -> Dict[str, float]:
     示例：
       - 收盘价上穿上轨视为突破。
     """
-    raise NotImplementedError("能力定义占位：执行Agent中对接数据源后实现")
+    raise NotImplementedError("指标计算由LLM自行分析历史K线数据完成，此处仅为能力定义")
 
 
 @tool
-def get_kline_data(exchange: str, symbol: str, timeframe: str, limit: int) -> List[Dict[str, float]]:
+def get_kline_data(exchange: str, symbol: str, timeframe: str, limit: int = 100) -> List[Dict[str, float]]:
     """
     获取K线数据。
     
     参数：
-      - exchange: 交易所名称
-      - symbol: 交易对
-      - timeframe: 时间周期
-      - limit: 获取数量
+      - exchange: 交易所名称 (目前仅支持 Binance)
+      - symbol: 交易对 (如 "BTCUSDT")
+      - timeframe: 时间周期 (如 "1h", "1d")
+      - limit: 获取数量 (默认100)
     
     返回：
-      - [{"time": int, "open": float, "high": float, "low": float, "close": float}, ...]
-    
-    适用：
-      - 获取历史数据进行指标计算
-      - 判断当前价格趋势
+      - [{"time": int, "open": float, "high": float, "low": float, "close": float, "volume": float}, ...]
     """
-    raise NotImplementedError("能力定义占位：执行Agent中对接数据源后实现")
+    if exchange == "Binance":
+        client = get_binance_client()
+        return client.get_kline_data(symbol, timeframe, limit)
+    return []
 
 
 @tool
@@ -225,17 +233,21 @@ def place_order(exchange: str, symbol: str, side: str, order_type: str, quantity
     执行下单操作。
     
     参数：
-      - exchange: 交易所
-      - symbol: 交易对
+      - exchange: 交易所 (目前仅支持 Binance)
+      - symbol: 交易对 (如 "BTCUSDT")
       - side: "buy" 或 "sell"
       - order_type: "market" (市价) 或 "limit" (限价)
-      - quantity: 数量
+      - quantity: 交易数量 (Base Asset Quantity)，指要购买或出售的资产数量（例如 0.1 BTC）。
+        *注意：如果你只知道投资金额（如 100 USDT），必须先计算 quantity = 投资金额 / 当前价格。*
       - price: 价格 (限价单必填)
     
     返回：
-      - {"order_id": str, "status": str}
+      - {"order_id": str, "status": str, "price": float, "quantity": float}
     """
-    raise NotImplementedError("能力定义占位：执行Agent中对接数据源后实现")
+    if exchange == "Binance":
+        client = get_binance_client()
+        return client.place_order(symbol, side, order_type, quantity, price)
+    return {"error": f"Unsupported exchange: {exchange}", "status": "FAILED"}
 
 
 # ============ 工具注册表（供 capability_manifest 自动提取信息） ============

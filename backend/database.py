@@ -36,10 +36,38 @@ def init_db():
     c.execute('''
         CREATE TABLE IF NOT EXISTS saved_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
             user_id INTEGER NOT NULL,
             rule_content TEXT NOT NULL,
+            total_capital FLOAT,
+            status TEXT DEFAULT 'stopped',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    # 迁移：检查 name 是否存在，如果不存在则添加
+    try:
+        c.execute('ALTER TABLE saved_rules ADD COLUMN name TEXT')
+        print("Added 'name' column to saved_rules")
+    except sqlite3.OperationalError:
+        # 列已存在，忽略错误
+        pass
+    
+    # 订单表
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id INTEGER NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            amount FLOAT NOT NULL,
+            price FLOAT NOT NULL,
+            status TEXT NOT NULL,
+            pnl FLOAT DEFAULT 0.0,
+            order_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (rule_id) REFERENCES saved_rules (id)
         )
     ''')
     
@@ -88,7 +116,7 @@ def get_user_by_id(user_id):
     conn.close()
     return user
 
-def save_rule(user_id, rule_content):
+def save_rule(user_id, rule_content, name=None):
     """保存规则"""
     try:
         conn = get_db_connection()
@@ -100,8 +128,8 @@ def save_rule(user_id, rule_content):
         else:
             content_str = rule_content
             
-        c.execute('INSERT INTO saved_rules (user_id, rule_content) VALUES (?, ?)', 
-                  (user_id, content_str))
+        c.execute('INSERT INTO saved_rules (user_id, rule_content, total_capital, name) VALUES (?, ?, ?, ?)', 
+                  (user_id, content_str, rule_content.get("user_requirements", {}).get("total_capital") if isinstance(rule_content, dict) else None, name))
         conn.commit()
         rule_id = c.lastrowid
         conn.close()
@@ -128,6 +156,9 @@ def get_user_rules(user_id):
             
         result.append({
             "id": r['id'],
+            "name": r['name'] or "未命名策略",
+            "status": r['status'],
+            "total_capital": r['total_capital'],
             "created_at": r['created_at'],
             "content": content
         })

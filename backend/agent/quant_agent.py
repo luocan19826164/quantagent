@@ -8,7 +8,7 @@ from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from .state_manager import QuantRuleState
-from .capability_manifest import get_capability_manifest_text
+from tool.capability_manifest import get_capability_manifest_text
 from .prompt_loader import get_prompt_loader
 import os
 import json
@@ -162,7 +162,7 @@ class QuantRuleCollectorAgent:
         
         # 产品类型验证（验证与交易所的兼容性）
         if su.get("product"):
-            from .tools_catalog import EXCHANGE_PRODUCTS
+            from tool.tools_catalog import EXCHANGE_PRODUCTS
             exchange = self.state.user_requirements.get("exchange")
             
             if exchange and exchange in EXCHANGE_PRODUCTS:
@@ -223,6 +223,14 @@ class QuantRuleCollectorAgent:
                 self.state.update_requirement("max_position_ratio", ratio)
             else:
                 logging.warning(f"无效的仓位比例: {ratio}，应该在0-1之间")
+        
+        # 总本金验证
+        if su.get("total_capital") is not None:
+            capital = su["total_capital"]
+            if isinstance(capital, (int, float)) and capital > 0:
+                self.state.update_requirement("total_capital", capital)
+            else:
+                logging.warning(f"无效的总本金: {capital}")
         
         # 指标验证（数组累加）
         if su.get("indicators_required"):

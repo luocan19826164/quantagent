@@ -11,6 +11,7 @@ import logging
 from dotenv import load_dotenv
 
 from agent import SessionManager, QuantRuleCollectorAgent
+from agent.execution_agent import QuantExecutionAgent
 import database  # 引入数据库模块
 
 # 配置日志
@@ -45,12 +46,15 @@ app = Flask(
     static_folder='../frontend/static'
 )
 app.secret_key = os.getenv("SECRET_KEY", "quant-agent-secret-key-2024")
+app.config['PERMANENT_SESSION_LIFETIME'] = 60 * 60 * 24 * 7  # 7 days
 CORS(app)
 
 # 全局会话管理器
 session_manager = SessionManager()
 # Agent实例缓存
 agent_cache = {}
+# 执行Agent
+execution_agent = None
 
 
 @app.route('/')
@@ -152,6 +156,67 @@ def get_state(session_id):
         }), 500
 
 
+@app.route('/api/rules/<int:rule_id>/toggle', methods=['POST'])
+def toggle_rule(rule_id):
+    """开启或停止规则执行"""
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+        
+    try:
+        data = request.json
+        active = data.get('active', False)
+        
+        global execution_agent
+        if execution_agent is None:
+            execution_agent = QuantExecutionAgent(database)
+            
+        if active:
+            success = execution_agent.start_rule_execution(rule_id)
+        else:
+            success = execution_agent.stop_rule_execution(rule_id)
+            
+        return jsonify({"success": success})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/orders', methods=['GET'])
+def get_orders():
+    """获取订单历史"""
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+        
+    try:
+        conn = database.get_db_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT o.*, r.rule_content 
+            FROM orders o
+            JOIN saved_rules r ON o.rule_id = r.id
+            WHERE r.user_id = ?
+            ORDER BY o.created_at DESC
+        ''', (session['user_id'],))
+        rows = c.fetchall()
+        conn.close()
+        
+        orders = []
+        for r in rows:
+            orders.append({
+                "id": r['id'],
+                "rule_id": r['rule_id'],
+                "symbol": r['symbol'],
+                "side": r['side'],
+                "amount": r['amount'],
+                "price": r['price'],
+                "status": r['status'],
+                "pnl": r['pnl'],
+                "created_at": r['created_at']
+            })
+        return jsonify({"success": True, "orders": orders})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/finalize/<session_id>', methods=['POST'])
 def finalize_rules(session_id):
     """完成规则收集，获取最终配置"""
@@ -240,7 +305,7 @@ def reset_session(session_id):
 @app.route('/api/indicators', methods=['GET'])
 def get_indicators():
     """获取所有可用指标（从 @tool 注解自动提取）"""
-    from agent.capability_manifest import get_indicators_for_api
+    from tool.capability_manifest import get_indicators_for_api
     indicators = get_indicators_for_api()
     return jsonify({
         "success": True,
@@ -251,7 +316,7 @@ def get_indicators():
 @app.route('/api/markets', methods=['GET'])
 def get_markets():
     """获取市场配置（从 tools_catalog 常量读取）"""
-    from agent.tools_catalog import SUPPORTED_MARKETS, SUPPORTED_SYMBOLS, SUPPORTED_TIMEFRAMES
+    from tool.tools_catalog import SUPPORTED_MARKETS, SUPPORTED_SYMBOLS, SUPPORTED_TIMEFRAMES
     # 转换时间周期为前端期望的 {value, label} 格式
     label_map = {
         "1m": "1分钟", "5m": "5分钟", "15m": "15分钟", "30m": "30分钟",
@@ -385,6 +450,7 @@ def register():
             return jsonify({"success": False, "error": "用户名已存在"}), 400
             
         # 注册成功自动登录
+        session.permanent = True
         session['user_id'] = user_id
         session['username'] = username
         
@@ -408,6 +474,7 @@ def login():
         if not user:
             return jsonify({"success": False, "error": "用户名或密码错误"}), 401
             
+        session.permanent = True
         session['user_id'] = user['id']
         session['username'] = user['username']
         
@@ -452,12 +519,17 @@ def save_rule_api():
             # 如果只传了session_id，尝试从内存获取当前状态
             state = session_manager.get_session(session_id)
             if state:
+                # 验证完整性
+                is_complete, _ = state.check_completeness()
+                if not is_complete:
+                    return jsonify({"success": False, "error": "策略信息尚未完善，请继续补充必要信息后再保存"}), 400
                 rule_content = state.to_dict()
         
         if not rule_content:
             return jsonify({"success": False, "error": "缺少规则内容"}), 400
             
-        rule_id = database.save_rule(session['user_id'], rule_content)
+        strategy_name = data.get('name')
+        rule_id = database.save_rule(session['user_id'], rule_content, name=strategy_name)
         if not rule_id:
             return jsonify({"success": False, "error": "保存失败"}), 500
             
@@ -477,27 +549,29 @@ def get_my_rules():
         
     try:
         rules = database.get_user_rules(session['user_id'])
+        # 补充状态信息
+        for r in rules:
+            conn = database.get_db_connection()
+            c = conn.cursor()
+            c.execute('SELECT status, total_capital FROM saved_rules WHERE id = ?', (r['id'],))
+            row = c.fetchone()
+            conn.close()
+            if row:
+                r['status'] = row['status']
+                r['total_capital'] = row['total_capital']
+                
         return jsonify({"success": True, "rules": rules})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("🚀 量化规则收集 Agent 启动中...")
-    print("=" * 60)
-    print(f"📍 访问地址: http://localhost:8081")
-    print(f"📊 API文档: http://localhost:8081/api/indicators")
-    
     # 初始化数据库
     try:
         database.init_db()
-        print("💾 数据库初始化成功 (quant.db)")
     except Exception as e:
         print(f"❌ 数据库初始化失败: {e}")
         
-    print("=" * 60)
-    
     app.run(
         host='0.0.0.0',
         port=8081,

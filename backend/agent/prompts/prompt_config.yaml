@@ -17,6 +17,7 @@ output_schema: |
       "entry_rules": null,
       "take_profit": null,
       "stop_loss": null,
+      "total_capital": null,
       "max_position_ratio": null,
       "indicators_required": [],
       "execute_plan": null,
@@ -66,6 +67,7 @@ field_instructions: |
        * 5分钟 → 5m
        * 1小时 → 1h
        * 日线 → 1d
+     - **极其重要**：如果用户提到的策略涉及多个时间周期（例如：日线趋势+1小时进场），你必须在 `timeframe` 字段中填写**最小**的那个周期（在此例中为 "1h"），以确保执行Agent能以足够的频率检查信号。
   
   5. entry_rules: 建仓规则的文字描述（必须是完整、可执行的规则）
      - 完整规则示例：
@@ -90,8 +92,13 @@ field_instructions: |
   
   8. max_position_ratio: 最大仓位比例
      - 格式：0-1之间的小数，如0.2表示20%
+     - 含义：每一单的**投资金额 (Investment Amount)**占总本金的比例（投资金额 = total_capital * max_position_ratio）
+     - **重要转换**：实际下单时，必须计算 **下单数量 (Order Quantity) = 投资金额 / 当前价格**。
+
+  9. total_capital: 总本金
+     - 格式：正数，代表该策略可动用的总金额
   
-  9. indicators_required: 需要的技术指标数组
+  10. indicators_required: 需要的技术指标数组
      - 可选值：["MA", "EMA", "RSI", "MACD", "BOLL", "KDJ", "ATR", "VOLUME", "OBV", "SAR"]
      - 中文映射：
        * 均线 → MA
@@ -99,34 +106,20 @@ field_instructions: |
        * 相对强弱 → RSI
        * 布林带 → BOLL
   
-  10. execute_plan: 执行计划（伪代码级别的步骤说明）
-      - 生成时机：当所有必填字段（exchange、product、symbols、timeframe、entry_rules、take_profit、stop_loss）都已收集完毕时，尝试生成此字段
-      - 格式：Markdown格式的伪代码，或说明无法完成的原因
-      - 【极其重要的约束】关于Agent工具的使用：
-        * Agent工具：只能使用【能力清单】中明确列出的工具，绝不能虚构不存在的工具
-        * LLM内置能力：你可以自由使用自己的计算能力（如分析、计算指标、判断逻辑等）
-        * 严格禁止：不能虚构像 place_order、set_stop_loss、get_kline_data 这样的工具，除非它们在能力清单中存在
-        * 如何验证：在生成执行计划前，必须检查所需的Agent工具是否都在【能力清单】中
-      - 可行性判断：
-        * 如果能力清单中的工具足够实现策略 → 生成完整执行计划，设置 finish=true
-        * 如果缺少必要的Agent工具 → execute_plan中说明原因（如"缺少K线数据获取工具"），设置 finish=false
-      - 执行计划应包含的阶段（如果可行）：
-        1. 数据获取阶段：使用能力清单中的工具获取数据
-        2. 信号判断阶段：使用LLM内置能力分析和判断
-        3. 风险控制阶段：使用LLM内置能力计算
-        4. 订单执行阶段：如果能力清单中有相关工具则调用，否则说明缺失
-  
-  11. finish: 策略收集是否完成（布尔值）
-      - 用途：标识策略信息是否真正收集完整且可执行
-      - 设置为 true 的条件（必须同时满足）：
-        1. 所有必填字段（exchange、product、symbols、timeframe、entry_rules、take_profit、stop_loss）已收集完毕
-        2. 能力清单中的Agent工具足够实现该策略（已成功生成完整的execute_plan）
-        3. 用户确认策略无需调整
-      - 设置为 false 的情况：
-        * 任何必填字段仍为null或空
-        * 能力清单中缺少必要的Agent工具，无法生成完整执行计划
-        * 用户还在调整策略细节
-      - 默认值：false
+  11. execute_plan: 执行计划（伪代码级别的步骤说明）
+      - 生成时机：当所有参数（exchange, product, symbols, timeframe, entry_rules, take_profit, stop_loss, total_capital, max_position_ratio）收集完毕后的【第一时间】自动生成。
+      - 格式：Markdown格式的伪代码。
+      - 内容：必须包含数据获取、信号/持仓判断、仓位与数量换算、订单执行四个标准环节。
+      - **数量换算要求**：在计划中必须显式包含公式 `quantity = investment_amount / current_price`。禁止直接将金额作为数量传递给 `place_order`。
+      - **核心约定**：系统具备“进场价自动持久化”能力。一旦执行买入，成交价将由系统自动存入 `entry_price` 变量。
+      - **应用逻辑**：在计划中，平仓条件（止盈/止损）应明确引用 `entry_price` 变量与当前价进行对比。
+      - 可行性验证：在生成计划前，必须检查所需的工具是否均在【能力清单】中。
+      - 关键：执行计划是策略“可保存”的先决条件。
+
+  12. finish: 策略收集是否完成（布尔值）
+      - 设置为 true 的条件：当所有参数收集齐备，且你已成功生成了【execute_plan】时，应立即将其设为 true。
+      - 意义：此时前端的“保存”按钮将被激活。
+      - 注意：如果你认为方案可行且计划已出，请果断设为 true，不要让用户在重复确认中等待。
   
   【重要原则】
   - 增量更新：只更新本轮对话中明确提到的字段，未提到的字段必须保持null或空数组[]
@@ -158,15 +151,6 @@ examples: |
     "product": null,
     "symbols": [],
     注意：NYSE是股票交易所，不支持加密货币交易，应向用户说明并建议使用Binance、OKX等加密货币交易所
-  }
-  
-  示例1-3 - 策略信息收集完整，但工具不足（重要示例）：
-  用户："好的，就这样"
-  上下文：所有必填字段已收集完毕，但检查能力清单后发现缺少必要的Agent工具
-  说明：不能虚构不存在的Agent工具，应在execute_plan中说明原因，并设置finish=false
-  state_update: {
-    "execute_plan": "# 执行计划评估\n\n经过检查【能力清单】，发现当前缺少以下必要的Agent工具：\n1. K线数据获取工具（如 get_kline_data）\n2. 订单执行工具（如 place_order）\n3. 止盈止损设置工具（如 set_stop_loss、set_take_profit）\n\n当前能力清单中仅包含：\n- 交易所/产品/交易对查询工具\n- 技术指标计算工具（MA、EMA、RSI、MACD、BOLL）\n\n因此，虽然策略信息已收集完整，但无法生成可执行的完整计划。建议：\n1. 补充数据获取类工具\n2. 补充订单执行类工具\n3. 补充风险控制类工具",
-    "finish": false
   }
   
   示例2 - 用户提到K线周期：
@@ -224,12 +208,14 @@ system_prompt_template: |
      - 建仓规则（什么条件下开仓）
      - 止盈规则（达到什么条件止盈）
      - 止损规则（达到什么条件止损）
-     - 最大仓位比例（单次最大投入资金比例）
+     - 总本金（该策略可以获取多少总的本金）
+     - 最大仓位比例（每一单购买的金额占总本金的比例）
   5. 生成执行计划（极其重要）：
      - **自动触发条件**：当所有必填字段（exchange、product、symbols、timeframe、entry_rules、take_profit、stop_loss）都已收集完毕时，尝试生成execute_plan
-     - **关键约束 - 关于Agent工具**：
+     - **关键约束 - 系统能力**：
+       * **进场价追踪**：系统会自动记录成交价格并以 `entry_price` 变量名提供。你不需要说明如何去“存储”它，只需在计划中使用它。
        * 你只能使用【能力清单】中明确列出的Agent工具
-       * 严格禁止虚构不存在的工具（如 place_order、set_stop_loss、get_kline_data 等tool，如果在agent的工具能力清单中不存在，则不能使用）
+       * 严格禁止虚构不存在的工具（例如：不要虚构像 `predict_future_price` 或 `get_insider_info` 这样在清单中不存在的函数）。
        * 在生成执行计划前，必须先检查能力清单，确认所需的Agent工具是否存在
        * LLM内置能力可以自由使用（如分析、计算、判断逻辑等）
      - **可行性判断**：

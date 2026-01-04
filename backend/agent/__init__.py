@@ -4,7 +4,9 @@ Agent模块初始化
 
 from .quant_agent import QuantRuleCollectorAgent
 from .state_manager import SessionManager, QuantRuleState
-from .tools_catalog import (
+from .quant_agent import QuantRuleCollectorAgent
+from .state_manager import SessionManager, QuantRuleState
+from tool.tools_catalog import (
     list_exchanges,
     list_products_by_exchange,
     list_symbols_by_exchange,
@@ -17,7 +19,7 @@ from .tools_catalog import (
     ALL_TOOLS,
     SUPPORTED_TIMEFRAMES,
 )
-from .capability_manifest import (
+from tool.capability_manifest import (
     get_capability_manifest_text,
     get_capability_manifest_json,
 )

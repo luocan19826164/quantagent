@@ -20,17 +20,15 @@ if [ ! -f .env ]; then
 fi
 
 # 检查依赖
-echo "检查依赖..."
+echo "检查依赖中..."
 if ! pip show langchain > /dev/null 2>&1; then
-    echo "📦 正在安装依赖..."
+    echo "📦 正在安装缺失依赖..."
     pip install -r requirements.txt
 fi
 
 echo ""
-echo "🚀 启动应用..."
-echo ""
-echo "访问地址: http://localhost:5000"
-echo "按 Ctrl+C 停止服务器"
+echo "🚀 启动程序: http://localhost:8081"
+echo "按 Ctrl+C 停止"
 echo ""
 
 # 启动应用

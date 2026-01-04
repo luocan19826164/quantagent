@@ -9,7 +9,6 @@ from typing import Dict, Any, List, Optional
 from . import tools_catalog as tc
 import inspect
 from .tools_catalog import EXCHANGE_PRODUCTS
-from .tools_catalog import EXCHANGE_PRODUCTS
 
 def _extract_tool_metadata(tool: Any) -> Dict[str, Any]:
     """

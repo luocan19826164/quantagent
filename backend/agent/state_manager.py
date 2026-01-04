@@ -21,10 +21,17 @@ class QuantRuleState:
             "exit_rules": None,  # 平仓规则
             "take_profit": None,  # 止盈
             "stop_loss": None,  # 止损
+            "total_capital": None,  # 总本金
             "max_position_ratio": None,  # 最大仓位比例
             "other_conditions": [],  # 其他条件
             "execute_plan": None,  # 根据用户的完善策略条件，模拟描述执行的步骤，伪代码一步步说明
             "finish": False,  # 策略是否收集完成且可执行
+        }
+        
+        self.runtime_status: Dict[str, Any] = {
+            "is_holding": False, # 是否持仓
+            "entry_price": None, # 开仓价格
+            "last_update": None  # 最后更新时间
         }
         
         self.execution_logic: Dict[str, Any] = {
@@ -84,7 +91,9 @@ class QuantRuleState:
             "entry_rules": "建仓规则",
             "take_profit": "止盈规则",
             "stop_loss": "止损规则",
-            "max_position_ratio": "仓位比例"
+            "max_position_ratio": "仓位比例",
+            "total_capital": "总本金",
+            "execute_plan": "执行计划"
         }
         
         missing = []
@@ -112,6 +121,7 @@ class QuantRuleState:
         return {
             "user_requirements": self.user_requirements,
             "execution_logic": self.execution_logic,
+            "runtime_status": self.runtime_status,
             "metadata": self.metadata
         }
     
@@ -145,6 +155,7 @@ class QuantRuleState:
                     "exit_rules": "平仓规则",
                     "take_profit": "止盈",
                     "stop_loss": "止损",
+                    "total_capital": "总本金",
                     "max_position_ratio": "最大仓位",
                     "other_conditions": "其他条件",
                     "finish": "完成状态"

@@ -2,12 +2,20 @@
 let sessionId = null;
 let finalRulesData = null;
 let currentModel = "deepseek:deepseek-chat";
+let currentChatMode = 'collector'; // 'collector' or 'executor'
 
 // 页面加载完成后初始化
 // 页面加载完成后初始化
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', () => {
     initSession();
-    loadIndicators();
+    // loadModels(); // Assuming this function is defined elsewhere or will be added
+
+    // 定期刷新执行状态 (如果处于执行视图)
+    setInterval(() => {
+        if (currentChatMode === 'executor') {
+            loadExecutionRules();
+        }
+    }, 5000);
     setupEventListeners();
     checkLoginStatus(); // 检查登录状态
 });
@@ -16,21 +24,21 @@ document.addEventListener('DOMContentLoaded', function() {
 function setupEventListeners() {
     // 发送按钮
     document.getElementById('sendBtn').addEventListener('click', sendMessage);
-    
+
     // 回车发送
-    document.getElementById('userInput').addEventListener('keypress', function(e) {
+    document.getElementById('userInput').addEventListener('keypress', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             sendMessage();
         }
     });
-    
+
     // 重置按钮
     document.getElementById('resetBtn').addEventListener('click', resetSession);
-    
+
     // 生成最终规则按钮
     document.getElementById('finalizeBtn').addEventListener('click', finalizeRules);
-    
+
     // 模型切换
     document.getElementById('modelSelector').addEventListener('change', switchModel);
 }
@@ -44,13 +52,13 @@ async function initSession() {
                 'Content-Type': 'application/json'
             }
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             sessionId = data.session_id;
             displayBotMessage(data.greeting);
-            
+
             // 初始化后立即切换到前端选择的模型
             await switchToModel(currentModel);
         } else {
@@ -64,9 +72,9 @@ async function initSession() {
 // 切换到指定模型（内部方法，不触发UI事件）
 async function switchToModel(modelValue) {
     if (!sessionId) return;
-    
+
     const [provider, model] = modelValue.split(':');
-    
+
     try {
         const response = await fetch(`/api/switch-model/${sessionId}`, {
             method: 'POST',
@@ -78,9 +86,9 @@ async function switchToModel(modelValue) {
                 model: model
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             currentModel = modelValue;
         }
@@ -93,22 +101,22 @@ async function switchToModel(modelValue) {
 async function sendMessage() {
     const input = document.getElementById('userInput');
     const message = input.value.trim();
-    
+
     if (!message) return;
-    
+
     if (!sessionId) {
         alert('会话未初始化，请刷新页面');
         return;
     }
-    
+
     // 显示用户消息
     displayUserMessage(message);
     input.value = '';
-    
+
     // 显示加载状态
     const loadingDiv = displayBotMessage('');
     loadingDiv.innerHTML = '<div class="loading">思考中</div>';
-    
+
     try {
         const response = await fetch('/api/chat', {
             method: 'POST',
@@ -120,15 +128,15 @@ async function sendMessage() {
                 message: message
             })
         });
-        
+
         const data = await response.json();
-        
+
         // 移除加载消息
         loadingDiv.remove();
-        
+
         if (data.success) {
             displayBotMessage(data.response);
-            
+
             // 更新状态面板
             if (data.state) {
                 updateStatePanel(data.state, data.is_complete, data.missing_fields);
@@ -136,7 +144,7 @@ async function sendMessage() {
         } else {
             displayBotMessage('错误: ' + (data.error || '未知错误'));
         }
-        
+
     } catch (error) {
         loadingDiv.remove();
         displayBotMessage('发送失败: ' + error.message);
@@ -180,33 +188,27 @@ function escapeHtml(text) {
 function updateStatePanel(state, isComplete, missingFields) {
     const stateContent = document.getElementById('stateContent');
     const indicator = document.getElementById('completenessIndicator');
-    const finalizeBtn = document.getElementById('finalizeBtn');
-    
     // 更新完整性指示器
     if (isComplete) {
         indicator.className = 'completeness-indicator complete';
         indicator.textContent = '✅ 已完成';
-        indicator.textContent = '✅ 已完成';
-        finalizeBtn.disabled = false;
         document.getElementById('saveRuleBtn').disabled = false; // 启用保存按钮
     } else {
         indicator.className = 'completeness-indicator incomplete';
         indicator.textContent = '⚠️ 未完成';
-        indicator.textContent = '⚠️ 未完成';
-        finalizeBtn.disabled = true;
         document.getElementById('saveRuleBtn').disabled = true;
     }
-    
+
     // 构建状态显示
     let html = '';
-    
+
     const requirements = state.user_requirements;
-    
+
     // 交易所
     if (requirements.exchange) {
         html += createStateItem('交易所', requirements.exchange);
     }
-    
+
     // 产品类型（需要英文转中文显示）
     if (requirements.product) {
         const productMap = {
@@ -218,53 +220,58 @@ function updateStatePanel(state, isComplete, missingFields) {
         const productDisplay = productMap[requirements.product] || requirements.product;
         html += createStateItem('产品类型', productDisplay);
     }
-    
+
     // 交易对
     if (requirements.symbols && requirements.symbols.length > 0) {
         html += createStateItem('交易对', requirements.symbols.join(', '));
     }
-    
+
     // 时间周期
     if (requirements.timeframe) {
         html += createStateItem('K线周期', requirements.timeframe);
     }
-    
+
     // 建仓规则
     if (requirements.entry_rules) {
         html += createStateItem('建仓规则', requirements.entry_rules);
     }
-    
+
     // 止盈
     if (requirements.take_profit) {
         html += createStateItem('止盈', requirements.take_profit);
     }
-    
+
     // 止损
     if (requirements.stop_loss) {
         html += createStateItem('止损', requirements.stop_loss);
     }
-    
+
     // 仓位比例
     if (requirements.max_position_ratio) {
         html += createStateItem('最大仓位', (requirements.max_position_ratio * 100) + '%');
     }
-    
+
+    // 总本金
+    if (requirements.total_capital) {
+        html += createStateItem('总本金', '$' + requirements.total_capital);
+    }
+
     // 使用的指标
     if (state.execution_logic && state.execution_logic.indicators_used.length > 0) {
         html += createStateItem('技术指标', state.execution_logic.indicators_used.join(', '));
     }
-    
+
     // 完成状态
     if (requirements.finish !== undefined) {
-        const finishStatus = requirements.finish ? 
-            '<span style="color: #48bb78; font-weight: bold;">✓ 已完成且可执行</span>' : 
+        const finishStatus = requirements.finish ?
+            '<span style="color: #48bb78; font-weight: bold;">✓ 已完成且可执行</span>' :
             '<span style="color: #ed8936; font-weight: bold;">⚠ 进行中或工具不足</span>';
         html += `<div class="state-item" style="border-left-color: ${requirements.finish ? '#48bb78' : '#ed8936'};">
             <div class="state-item-label">🎯 完成状态</div>
             <div class="state-item-value">${finishStatus}</div>
         </div>`;
     }
-    
+
     // 执行计划（如果有）
     if (requirements.execute_plan) {
         html += `<div class="state-item" style="border-left-color: #667eea;">
@@ -272,7 +279,7 @@ function updateStatePanel(state, isComplete, missingFields) {
             <div class="state-item-value">${formatExecutePlan(requirements.execute_plan)}</div>
         </div>`;
     }
-    
+
     // 缺失字段
     if (missingFields && missingFields.length > 0) {
         html += `<div class="state-item" style="border-left-color: #ffc107;">
@@ -280,7 +287,7 @@ function updateStatePanel(state, isComplete, missingFields) {
             <div class="state-item-value">${missingFields.join(', ')}</div>
         </div>`;
     }
-    
+
     if (html) {
         stateContent.innerHTML = html;
     } else {
@@ -291,7 +298,7 @@ function updateStatePanel(state, isComplete, missingFields) {
 // 格式化执行计划（将Markdown转换为HTML）
 function formatExecutePlan(plan) {
     if (!plan) return '';
-    
+
     // 简单的Markdown转换
     let html = plan
         .replace(/\n/g, '<br>')
@@ -301,7 +308,7 @@ function formatExecutePlan(plan) {
         .replace(/- IF /g, '<span style="color: #4299e1;">• IF </span>')
         .replace(/- ELSE:/g, '<span style="color: #9f7aea;">• ELSE:</span>')
         .replace(/- (.+?)(<br>|$)/g, '<span style="margin-left: 1em;">• $1</span>$2');
-    
+
     return '<div style="font-family: monospace; font-size: 12px; line-height: 1.6; padding: 8px; background: #f7fafc; border-radius: 4px; white-space: pre-wrap;">' + html + '</div>';
 }
 
@@ -313,45 +320,6 @@ function createStateItem(label, value) {
     </div>`;
 }
 
-// 加载指标列表
-async function loadIndicators() {
-    try {
-        const response = await fetch('/api/indicators');
-        const data = await response.json();
-        
-        if (data.success) {
-            const content = document.getElementById('indicatorsContent');
-            let html = '';
-            
-            data.indicators.forEach(ind => {
-                html += `<div class="indicator-item">
-                    <div class="indicator-name">${ind.name}</div>
-                    <div class="indicator-full-name">${ind.full_name}</div>
-                    <div class="indicator-desc">${ind.description}</div>
-                    <div class="indicator-example">${ind.example}</div>
-                </div>`;
-            });
-            
-            content.innerHTML = html;
-        }
-    } catch (error) {
-        console.error('加载指标失败:', error);
-    }
-}
-
-// 切换指标面板
-function toggleIndicators() {
-    const section = document.querySelector('.indicators-section');
-    const content = document.getElementById('indicatorsContent');
-    
-    if (content.style.display === 'none') {
-        content.style.display = 'block';
-        section.classList.remove('collapsed');
-    } else {
-        content.style.display = 'none';
-        section.classList.add('collapsed');
-    }
-}
 
 // 切换模型
 async function switchModel(event) {
@@ -360,14 +328,14 @@ async function switchModel(event) {
         event.target.value = currentModel;
         return;
     }
-    
+
     const modelValue = event.target.value;
     const [provider, model] = modelValue.split(':');
-    
+
     if (currentModel === modelValue) {
         return; // 没有切换
     }
-    
+
     try {
         const response = await fetch(`/api/switch-model/${sessionId}`, {
             method: 'POST',
@@ -379,9 +347,9 @@ async function switchModel(event) {
                 model: model
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             currentModel = modelValue;
             // 静默切换，不显示弹窗
@@ -400,26 +368,26 @@ async function resetSession() {
     if (!confirm('确定要重置会话吗？这将清空所有对话和收集的信息。')) {
         return;
     }
-    
+
     try {
         if (sessionId) {
             await fetch(`/api/reset/${sessionId}`, {
                 method: 'POST'
             });
         }
-        
+
         // 清空聊天记录
         document.getElementById('chatMessages').innerHTML = '';
-        
+
         // 清空状态面板
         document.getElementById('stateContent').innerHTML = '<div class="state-loading">等待收集信息...</div>';
         document.getElementById('completenessIndicator').className = 'completeness-indicator incomplete';
         document.getElementById('completenessIndicator').textContent = '未完成';
         document.getElementById('finalizeBtn').disabled = true;
-        
+
         // 重新初始化
         await initSession();
-        
+
     } catch (error) {
         alert('重置失败: ' + error.message);
     }
@@ -431,21 +399,21 @@ async function finalizeRules() {
         alert('会话未初始化');
         return;
     }
-    
+
     try {
         const response = await fetch(`/api/finalize/${sessionId}`, {
             method: 'POST'
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             finalRulesData = data.rules;
             showFinalRulesModal(data.rules);
         } else {
             alert('生成失败: ' + (data.error || '规则信息不完整'));
         }
-        
+
     } catch (error) {
         alert('生成失败: ' + error.message);
     }
@@ -455,7 +423,7 @@ async function finalizeRules() {
 function showFinalRulesModal(rules) {
     const modal = document.getElementById('finalRulesModal');
     const jsonDisplay = document.getElementById('finalRulesJson');
-    
+
     jsonDisplay.textContent = JSON.stringify(rules, null, 2);
     modal.style.display = 'block';
 }
@@ -468,25 +436,25 @@ function closeFinalRulesModal() {
 // 下载规则
 function downloadRules() {
     if (!finalRulesData) return;
-    
+
     const dataStr = JSON.stringify(finalRulesData, null, 2);
     const dataBlob = new Blob([dataStr], { type: 'application/json' });
-    
+
     const url = URL.createObjectURL(dataBlob);
     const link = document.createElement('a');
     link.href = url;
     link.download = `quant_rules_${Date.now()}.json`;
     link.click();
-    
+
     URL.revokeObjectURL(url);
 }
 
 // 复制规则
 function copyRules() {
     if (!finalRulesData) return;
-    
+
     const dataStr = JSON.stringify(finalRulesData, null, 2);
-    
+
     navigator.clipboard.writeText(dataStr).then(() => {
         alert('已复制到剪贴板！');
     }).catch(err => {
@@ -496,11 +464,11 @@ function copyRules() {
 }
 
 // 点击弹窗外部关闭
-window.onclick = function(event) {
+window.onclick = function (event) {
     const modal = document.getElementById('finalRulesModal');
     const authModal = document.getElementById('authModal');
     const myRulesModal = document.getElementById('myRulesModal');
-    
+
     if (event.target === modal) {
         closeFinalRulesModal();
     }
@@ -514,6 +482,147 @@ window.onclick = function(event) {
 
 
 // ==========================================
+// Agent 切换逻辑
+// ==========================================
+
+function switchAgent(mode) {
+    if (mode === currentChatMode) return;
+
+    currentChatMode = mode;
+
+    // 更新导航样式
+    document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+
+    const collectorView = document.getElementById('collectorView');
+    const executorView = document.getElementById('executorView');
+    const headerTitle = document.querySelector('.header h1');
+
+    if (mode === 'collector') {
+        document.getElementById('navRuleCollector').classList.add('active');
+        if (collectorView) collectorView.style.display = 'grid';
+        if (executorView) executorView.style.display = 'none';
+        if (headerTitle) headerTitle.innerText = '🤖 量化规则收集 Agent';
+    } else {
+        document.getElementById('navRuleExecutor').classList.add('active');
+        if (collectorView) collectorView.style.display = 'none';
+        if (executorView) executorView.style.display = 'grid';
+        if (headerTitle) headerTitle.innerText = '⚡ 量化规则执行 Agent';
+        loadExecutionRules();
+    }
+}
+
+// ==========================================
+// 执行 Agent 逻辑
+// ==========================================
+
+async function loadExecutionRules() {
+    try {
+        const response = await fetch('/api/my_rules');
+        const data = await response.json();
+
+        if (data.success) {
+            renderExecutionRules(data.rules);
+            // 顺便加载订单历史
+            loadOrders();
+        } else if (data.error === "请先登录") {
+            // 如果后端返回未登录，前端需要同步状态
+            currentUser = null;
+            updateUserInfo();
+            renderExecutionRules([]); // 清空列表
+        }
+    } catch (error) {
+        console.error('Failed to load execution rules:', error);
+    }
+}
+
+function renderExecutionRules(rules) {
+    const listElement = document.getElementById('executionRulesList');
+    if (rules.length === 0) {
+        listElement.innerHTML = '<div class="no-data">暂无已保存策略，请先在收集模型中保存。</div>';
+        return;
+    }
+
+    listElement.innerHTML = rules.map(rule => {
+        const req = rule.content.user_requirements;
+        const isRunning = rule.status === 'running';
+
+        return `
+            <div class="exec-rule-card">
+                <div class="exec-rule-header">
+                    <div class="exec-rule-name">${rule.name || (req.symbols.join(', ') + ' (' + req.timeframe + ')')}</div>
+                    <span class="exec-status-badge ${isRunning ? 'exec-status-running' : 'exec-status-stopped'}">
+                        ${isRunning ? '运行中' : '已停止'}
+                    </span>
+                </div>
+                <div class="exec-details">
+                    <p>交易所: ${req.exchange} | 周期: ${req.timeframe}</p>
+                    <p>交易标的: ${req.symbols.join(', ')}</p>
+                    <p>总本金: $${rule.total_capital || '未设置'}</p>
+                    <p>建仓规则: ${req.entry_rules?.substring(0, 50)}...</p>
+                </div>
+                <div class="exec-actions">
+                    <span style="font-size: 13px; color: #666;">自动执行</span>
+                    <label class="switch">
+                        <input type="checkbox" ${isRunning ? 'checked' : ''} onchange="toggleRuleExecution(${rule.id}, this.checked)">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function toggleRuleExecution(ruleId, shouldStart) {
+    try {
+        const response = await fetch(`/api/rules/${ruleId}/toggle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ active: shouldStart })
+        });
+        const data = await response.json();
+
+        if (!data.success) {
+            alert('操作失败: ' + data.error);
+            loadExecutionRules(); // 恢复状态
+        } else {
+            loadExecutionRules();
+        }
+    } catch (error) {
+        console.error('Toggle execution error:', error);
+    }
+}
+
+async function loadOrders() {
+    try {
+        const response = await fetch('/api/orders');
+        const data = await response.json();
+
+        if (data.success) {
+            const tableBody = document.getElementById('ordersTableBody');
+            if (data.orders.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="6" class="no-data">暂无订单数据</td></tr>';
+                return;
+            }
+
+            tableBody.innerHTML = data.orders.map(order => `
+                <tr>
+                    <td>${new Date(order.created_at).toLocaleString()}</td>
+                    <td>${order.symbol}</td>
+                    <td class="side-${order.side.toLowerCase()}">${order.side === 'buy' ? '做多' : '做空'}</td>
+                    <td>$${order.price.toFixed(2)}</td>
+                    <td>${order.amount.toFixed(4)}</td>
+                    <td class="${order.pnl >= 0 ? 'pnl-plus' : 'pnl-minus'}">${order.pnl >= 0 ? '+' : ''}${order.pnl.toFixed(2)}</td>
+                </tr>
+            `).join('');
+        } else if (data.error === "请先登录") {
+            document.getElementById('ordersTableBody').innerHTML = '<tr><td colspan="6" class="no-data">请先登录以查看订单</td></tr>';
+        }
+    } catch (error) {
+        console.error('Failed to load orders:', error);
+    }
+}
+
+// ==========================================
 // 用户认证与保存逻辑
 // ==========================================
 
@@ -525,7 +634,7 @@ async function checkLoginStatus() {
     try {
         const response = await fetch('/api/check_status');
         const data = await response.json();
-        
+
         if (data.is_logged_in) {
             currentUser = data.user;
             updateUserInfo();
@@ -545,13 +654,15 @@ function updateUserInfo() {
     const logoutBtn = document.getElementById('logoutBtn');
     const myRulesBtn = document.getElementById('myRulesBtn');
     const saveRuleBtn = document.getElementById('saveRuleBtn');
-    
+
     if (currentUser) {
-        userInfo.style.display = 'inline';
+        userInfo.style.display = 'inline-block';
         userInfo.textContent = `👤 ${currentUser.username}`;
         authBtn.style.display = 'none';
         logoutBtn.style.display = 'inline-block';
         myRulesBtn.style.display = 'inline-block';
+        // Ensure parent is visible
+        userInfo.parentElement.style.display = 'flex';
     } else {
         userInfo.style.display = 'none';
         authBtn.style.display = 'inline-block';
@@ -578,7 +689,7 @@ function switchAuthMode(mode) {
     const loginForm = document.getElementById('loginForm');
     const registerForm = document.getElementById('registerForm');
     const tabs = document.querySelectorAll('.auth-tab');
-    
+
     if (mode === 'login') {
         loginForm.style.display = 'block';
         registerForm.style.display = 'none';
@@ -596,28 +707,28 @@ function switchAuthMode(mode) {
 async function performLogin() {
     const usernameInput = document.getElementById('loginUsername');
     const passwordInput = document.getElementById('loginPassword');
-    
+
     if (!usernameInput.value || !passwordInput.value) {
         alert('请输入用户名和密码');
         return;
     }
-    
+
     try {
         const response = await fetch('/api/login', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 username: usernameInput.value,
                 password: passwordInput.value
             })
         });
-        
+
         const data = await response.json();
         if (data.success) {
             currentUser = data.user;
             updateUserInfo();
             closeAuthModal();
-            
+
             // 如果有待处理的保存操作，立即执行
             if (pendingSave) {
                 saveRule();
@@ -634,29 +745,29 @@ async function performLogin() {
 async function performRegister() {
     const usernameInput = document.getElementById('regUsername');
     const passwordInput = document.getElementById('regPassword');
-    
+
     if (!usernameInput.value || !passwordInput.value) {
         alert('请设置用户名和密码');
         return;
     }
-    
+
     try {
         const response = await fetch('/api/register', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 username: usernameInput.value,
                 password: passwordInput.value
             })
         });
-        
+
         const data = await response.json();
         if (data.success) {
             currentUser = data.user;
             updateUserInfo();
             closeAuthModal();
             alert('注册成功！');
-            
+
             // 如果有待处理的保存操作，立即执行
             if (pendingSave) {
                 saveRule();
@@ -688,22 +799,26 @@ async function saveRule() {
         showAuthModal();
         return;
     }
-    
+
     if (!sessionId) {
         alert('会话未初始化');
         return;
     }
-    
+
+    const strategyName = prompt("请输入策略名称:", "我的策略");
+    if (strategyName === null) return; // 用户取消
+
     try {
         // 直接根据 session_id 保存，不需要前端传 content，后端自己取
         const response = await fetch('/api/save_rule', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                session_id: sessionId
+                session_id: sessionId,
+                name: strategyName
             })
         });
-        
+
         const data = await response.json();
         if (data.success) {
             alert('✅ 策略已保存到云端');
@@ -721,31 +836,31 @@ async function showMyRules() {
     const modal = document.getElementById('myRulesModal');
     const list = document.getElementById('rulesList');
     modal.style.display = 'block';
-    
+
     list.innerHTML = '<div class="loading">加载中...</div>';
-    
+
     try {
         const response = await fetch('/api/my_rules');
         const data = await response.json();
-        
+
         if (data.success) {
             if (data.rules.length === 0) {
                 list.innerHTML = '<div class="no-data">暂无保存的策略</div>';
                 return;
             }
-            
+
             let html = '';
             data.rules.forEach(rule => {
                 // 确保content是对象
                 let content = rule.content;
                 if (typeof content === 'string') {
-                    try { content = JSON.parse(content); } catch(e) {}
+                    try { content = JSON.parse(content); } catch (e) { }
                 }
-                
+
                 // 提取关键信息
                 const req = content.user_requirements || {};
                 const summary = `${req.exchange || '未指定'} | ${req.product || ''} | ${req.symbols ? req.symbols.join(',') : ''} | ${req.timeframe || ''}`;
-                
+
                 html += `
                 <div class="rule-card">
                     <div class="rule-header">
