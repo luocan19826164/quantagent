@@ -29,9 +29,11 @@ class QuantRuleState:
         }
         
         self.runtime_status: Dict[str, Any] = {
-            "is_holding": False, # 是否持仓
-            "entry_price": None, # 开仓价格
-            "last_update": None  # 最后更新时间
+            "is_holding": False,      # 是否持仓
+            "entry_price": None,      # 开仓价格
+            "quantity": 0.0,          # 持仓数量（base 资产，如 BTC 数量）- **平仓时必须使用此字段**
+            "position_side": None,     # 持仓方向：'long'（多头）或 'short'（空头），仅合约使用
+            "last_update": None       # 最后更新时间
         }
         
         self.execution_logic: Dict[str, Any] = {
