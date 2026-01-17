@@ -41,18 +41,32 @@ pip install -r requirements.txt
 
 ### 2. 配置环境变量
 
-复制 `.env.example` 为 `.env` 并填入你的 API Key：
+运行配置脚本：
 
 ```bash
-cp .env.example .env
+./setup_env.sh
 ```
 
-编辑 `.env` 文件：
-```
-OPENAI_API_KEY=your_actual_api_key
+或手动编辑 `.env` 文件，配置你的 LLM Provider（三选一）：
+
+```bash
+# 方式1: OpenRouter（推荐中国用户访问 Claude）
+OPENROUTER_API_KEY=sk-or-v1-xxxxx
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=anthropic/claude-sonnet-4
+
+# 方式2: DeepSeek
+DEEPSEEK_API_KEY=sk-xxxxx
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-reasoner
+
+# 方式3: OpenAI
+OPENAI_API_KEY=sk-proj-xxxxx
 OPENAI_BASE_URL=https://api.openai.com/v1
-MODEL_NAME=gpt-4o-mini
+OPENAI_MODEL=gpt-4o
 ```
+
+详细配置说明见 `.env配置说明.md`
 
 ### 3. 运行应用
 
@@ -121,9 +135,9 @@ python backend/app.py
 ## 技术栈
 
 - **后端**: Flask + LangChain
-- **AI**: OpenAI GPT-4
+- **AI**: OpenAI GPT-4 / DeepSeek / Claude (via OpenRouter)
 - **前端**: HTML + CSS + JavaScript
-- **状态管理**: 内存会话存储
+- **状态管理**: 内存会话存储 + SQLite
 
 ## 注意事项
 

@@ -1,12 +1,18 @@
 // 全局变量
 let sessionId = null;
 let finalRulesData = null;
-let currentModel = "deepseek:deepseek-chat";
+let currentModel = "openrouter:anthropic/claude-sonnet-4";
 let currentChatMode = 'collector'; // 'collector' or 'executor'
 
 // 页面加载完成后初始化
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', () => {
+    // 初始化模型选择器为默认值
+    const modelSelector = document.getElementById('modelSelector');
+    if (modelSelector) {
+        modelSelector.value = currentModel;
+    }
+    
     initSession();
     // loadModels(); // Assuming this function is defined elsewhere or will be added
 

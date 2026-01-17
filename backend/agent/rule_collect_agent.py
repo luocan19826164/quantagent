@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from .state_manager import QuantRuleState
+from utils.llm_config import resolve_llm_config
 from tool.capability_manifest import get_capability_manifest_text
 from .prompt_loader import get_prompt_loader
 import os
@@ -29,19 +30,27 @@ class QuantRuleCollectorAgent:
             output_key="output"
         )
         
+        # 解析 LLM 配置
+        llm_config = resolve_llm_config("[RuleCollector]")
+        
         # 当前使用的模型信息
-        self.current_model = os.getenv("MODEL_NAME", "gpt-4o-mini")
-        self.current_api_key = os.getenv("OPENAI_API_KEY")
-        self.current_base_url = os.getenv("OPENAI_BASE_URL")
+        self.current_model = llm_config["model"]
+        self.current_api_key = llm_config["api_key"]
+        self.current_base_url = llm_config["base_url"]
+        self.current_extra_headers = llm_config["extra_headers"]
         
         # 初始化LLM (启用JSON模式)
-        self.llm = ChatOpenAI(
-            model=self.current_model,
-            temperature=0.7,
-            api_key=self.current_api_key,
-            base_url=self.current_base_url,
-            model_kwargs={"response_format": {"type": "json_object"}}
-        )
+        llm_kwargs = {
+            "model": self.current_model,
+            "temperature": 0.7,
+            "api_key": self.current_api_key,
+            "base_url": self.current_base_url,
+            "model_kwargs": {"response_format": {"type": "json_object"}}
+        }
+        if self.current_extra_headers:
+            llm_kwargs["default_headers"] = self.current_extra_headers
+            
+        self.llm = ChatOpenAI(**llm_kwargs)
         
         # 创建对话提示模板（无工具执行）
         self.prompt = self._create_prompt()
@@ -255,7 +264,7 @@ class QuantRuleCollectorAgent:
         self.memory.clear()
         self.state = QuantRuleState()
     
-    def switch_model(self, model_name: str, api_key: str, base_url: str = None):
+    def switch_model(self, model_name: str, api_key: str, base_url: str = None, extra_headers: Dict = None):
         """
         切换模型，保持上下文和历史记录不变
         
@@ -263,20 +272,26 @@ class QuantRuleCollectorAgent:
             model_name: 新的模型名称
             api_key: API密钥
             base_url: API基础URL（可选）
+            extra_headers: 额外的 HTTP headers（可选，OpenRouter 需要）
         """
         # 更新模型信息
         self.current_model = model_name
         self.current_api_key = api_key
         self.current_base_url = base_url
+        self.current_extra_headers = extra_headers
         
         # 重新创建LLM实例（memory和state保持不变）
-        self.llm = ChatOpenAI(
-            model=self.current_model,
-            temperature=0.7,
-            api_key=self.current_api_key,
-            base_url=self.current_base_url,
-            model_kwargs={"response_format": {"type": "json_object"}}
-        )
+        llm_kwargs = {
+            "model": self.current_model,
+            "temperature": 0.7,
+            "api_key": self.current_api_key,
+            "base_url": self.current_base_url,
+            "model_kwargs": {"response_format": {"type": "json_object"}}
+        }
+        if self.current_extra_headers:
+            llm_kwargs["default_headers"] = self.current_extra_headers
+            
+        self.llm = ChatOpenAI(**llm_kwargs)
     
     def get_current_model_info(self) -> Dict[str, Any]:
         """获取当前模型信息"""

@@ -12,7 +12,9 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage
 from .state_manager import QuantRuleState
 from .prompt_loader import get_execution_prompt_loader
+from utils.llm_config import resolve_llm_config
 from tool.tools_catalog import get_kline_data, place_order, ALL_TOOLS
+
 
 class QuantExecutionAgent:
     """量化规则执行Agent"""
@@ -23,33 +25,22 @@ class QuantExecutionAgent:
         self.scheduler.start()
         self.running_jobs = {}  # rule_id -> job_id
         
-        # 自动检测模型配置 - 优先使用 OpenAI/ChatGPT
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL")
+        # 解析 LLM 配置
+        llm_config = resolve_llm_config("[Execution]")
+        logging.info(f"Initializing Execution Agent - Provider: {llm_config['provider']}, "
+                     f"Model: {llm_config['model']}, Base URL: {llm_config['base_url']}")
         
-        # 优先使用 DeepSeek（deepseek-reasoner 推理能力更强）
-        if os.getenv("DEEPSEEK_API_KEY"):
-            api_key = os.getenv("DEEPSEEK_API_KEY")
-            base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-            model_name = "deepseek-reasoner"  # 推理模型，数学能力更强
-            logging.info("Using DeepSeek Reasoner model configuration")
-        elif api_key:
-            # 使用 OpenAI 时，强制使用 OpenAI 兼容的模型
-            model_name = "gpt-4o"
-            logging.info("Using OpenAI/ChatGPT model configuration")
-        else:
-            model_name = os.getenv("MODEL_NAME", "gpt-4o")
-            logging.warning("No API key found immediately, will rely on env vars during invoke if possible")
+        # 构建 LLM 初始化参数
+        llm_kwargs = {
+            "model": llm_config["model"],
+            "temperature": 0,
+            "api_key": llm_config["api_key"],
+            "base_url": llm_config["base_url"]
+        }
+        if llm_config["extra_headers"]:
+            llm_kwargs["default_headers"] = llm_config["extra_headers"]
             
-        logging.info(f"Initializing Execution Agent with Model: {model_name}, Base URL: {base_url}")
-        
-        # 初始化LLM用于决策分析
-        self.llm = ChatOpenAI(
-            model=model_name,
-            temperature=0,
-            api_key=api_key,
-            base_url=base_url
-        )
+        self.llm = ChatOpenAI(**llm_kwargs)
         
         # 工具映射字典（工具名称 -> 工具函数）
         # 注意：只暴露 get_kline_data 给 LLM，place_order 由代码层控制

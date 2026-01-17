@@ -15,6 +15,9 @@ from agent import SessionManager, QuantRuleCollectorAgent
 from agent.execution_agent import QuantExecutionAgent
 import database  # 引入数据库模块
 
+# 先加载环境变量，再导入配置模块
+load_dotenv()
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -25,21 +28,11 @@ logging.basicConfig(
     ]
 )
 
-# 支持的模型配置
-SUPPORTED_MODELS = {
-    "openai": {
-        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"],
-        "api_key_env": "OPENAI_API_KEY",
-        "base_url": "https://api.openai.com/v1"
-    },
-    "deepseek": {
-        "models": ["deepseek-chat", "deepseek-coder"],
-        "api_key_env": "DEEPSEEK_API_KEY",
-        "base_url": "https://api.deepseek.com/v1"
-    }
-}
+# 从环境变量动态加载支持的模型配置
+from utils.llm_config import get_supported_models, get_extra_headers
 
-load_dotenv()
+# 支持的模型配置（从环境变量动态读取）
+SUPPORTED_MODELS = get_supported_models()
 # Debug: Print loaded keys (masked)
 print(f"DEBUG: OPENAI_API_KEY present: {'OPENAI_API_KEY' in os.environ}")
 print(f"DEBUG: DEEPSEEK_API_KEY present: {'DEEPSEEK_API_KEY' in os.environ}")
@@ -474,7 +467,11 @@ def switch_model(session_id):
         
         # 切换模型
         base_url = provider_config["base_url"]
-        agent.switch_model(model_name, api_key, base_url)
+        
+        # 获取额外的 headers（如果需要）
+        extra_headers = get_extra_headers(provider)
+        
+        agent.switch_model(model_name, api_key, base_url, extra_headers)
         
         return jsonify({
             "success": True,
