@@ -23,24 +23,27 @@ document.addEventListener('DOMContentLoaded', () => {
 // 设置事件监听器
 function setupEventListeners() {
     // 发送按钮
-    document.getElementById('sendBtn').addEventListener('click', sendMessage);
+    const sendBtn = document.getElementById('sendBtn');
+    if (sendBtn) sendBtn.addEventListener('click', sendMessage);
 
     // 回车发送
-    document.getElementById('userInput').addEventListener('keypress', function (e) {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
-    });
-
-    // 重置按钮
-    document.getElementById('resetBtn').addEventListener('click', resetSession);
+    const userInput = document.getElementById('userInput');
+    if (userInput) {
+        userInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+    }
 
     // 生成最终规则按钮
-    document.getElementById('finalizeBtn').addEventListener('click', finalizeRules);
+    const finalizeBtn = document.getElementById('finalizeBtn');
+    if (finalizeBtn) finalizeBtn.addEventListener('click', finalizeRules);
 
     // 模型切换
-    document.getElementById('modelSelector').addEventListener('change', switchModel);
+    const modelSelector = document.getElementById('modelSelector');
+    if (modelSelector) modelSelector.addEventListener('change', switchModel);
 }
 
 // 初始化会话
@@ -256,10 +259,6 @@ function updateStatePanel(state, isComplete, missingFields) {
         html += createStateItem('总本金', '$' + requirements.total_capital);
     }
 
-    // 使用的指标
-    if (state.execution_logic && state.execution_logic.indicators_used.length > 0) {
-        html += createStateItem('技术指标', state.execution_logic.indicators_used.join(', '));
-    }
 
     // 完成状态
     if (requirements.finish !== undefined) {
@@ -360,36 +359,6 @@ async function switchModel(event) {
     } catch (error) {
         event.target.value = currentModel;
         alert('切换失败: ' + error.message);
-    }
-}
-
-// 重置会话
-async function resetSession() {
-    if (!confirm('确定要重置会话吗？这将清空所有对话和收集的信息。')) {
-        return;
-    }
-
-    try {
-        if (sessionId) {
-            await fetch(`/api/reset/${sessionId}`, {
-                method: 'POST'
-            });
-        }
-
-        // 清空聊天记录
-        document.getElementById('chatMessages').innerHTML = '';
-
-        // 清空状态面板
-        document.getElementById('stateContent').innerHTML = '<div class="state-loading">等待收集信息...</div>';
-        document.getElementById('completenessIndicator').className = 'completeness-indicator incomplete';
-        document.getElementById('completenessIndicator').textContent = '未完成';
-        document.getElementById('finalizeBtn').disabled = true;
-
-        // 重新初始化
-        await initSession();
-
-    } catch (error) {
-        alert('重置失败: ' + error.message);
     }
 }
 
@@ -522,8 +491,6 @@ async function loadExecutionRules() {
 
         if (data.success) {
             renderExecutionRules(data.rules);
-            // 顺便加载订单历史
-            loadOrders();
         } else if (data.error === "请先登录") {
             // 如果后端返回未登录，前端需要同步状态
             currentUser = null;
@@ -561,7 +528,8 @@ function renderExecutionRules(rules) {
                     <p>建仓规则: ${req.entry_rules?.substring(0, 50)}...</p>
                 </div>
                 <div class="exec-actions">
-                    <span style="font-size: 13px; color: #666;">自动执行</span>
+                    <a href="javascript:void(0)" class="detail-link" onclick="showRuleDetail(${rule.id})">查看详情</a>
+                    <span style="font-size: 13px; color: #666; margin-left: 15px;">自动执行</span>
                     <label class="switch">
                         <input type="checkbox" ${isRunning ? 'checked' : ''} onchange="toggleRuleExecution(${rule.id}, this.checked)">
                         <span class="slider round"></span>
@@ -632,7 +600,9 @@ let pendingSave = false; // 登录后是否自动保存
 // 检查登录状态
 async function checkLoginStatus() {
     try {
-        const response = await fetch('/api/check_status');
+        const response = await fetch('/api/check_status', {
+            credentials: 'same-origin'
+        });
         const data = await response.json();
 
         if (data.is_logged_in) {
@@ -652,7 +622,6 @@ function updateUserInfo() {
     const userInfo = document.getElementById('userInfo');
     const authBtn = document.getElementById('authBtn');
     const logoutBtn = document.getElementById('logoutBtn');
-    const myRulesBtn = document.getElementById('myRulesBtn');
     const saveRuleBtn = document.getElementById('saveRuleBtn');
 
     if (currentUser) {
@@ -660,14 +629,12 @@ function updateUserInfo() {
         userInfo.textContent = `👤 ${currentUser.username}`;
         authBtn.style.display = 'none';
         logoutBtn.style.display = 'inline-block';
-        myRulesBtn.style.display = 'inline-block';
         // Ensure parent is visible
         userInfo.parentElement.style.display = 'flex';
     } else {
         userInfo.style.display = 'none';
         authBtn.style.display = 'inline-block';
         logoutBtn.style.display = 'none';
-        myRulesBtn.style.display = 'none';
     }
 }
 
@@ -831,59 +798,186 @@ async function saveRule() {
     }
 }
 
-// 显示我的策略
-async function showMyRules() {
-    const modal = document.getElementById('myRulesModal');
-    const list = document.getElementById('rulesList');
-    modal.style.display = 'block';
+// ==========================================
+// 规则详情页面逻辑
+// ==========================================
 
-    list.innerHTML = '<div class="loading">加载中...</div>';
+let currentRuleId = null;
 
+// 显示规则详情
+async function showRuleDetail(ruleId) {
+    currentRuleId = ruleId;
+    
+    // 切换视图
+    document.getElementById('executorView').style.display = 'none';
+    document.getElementById('collectorView').style.display = 'none';
+    document.getElementById('ruleDetailView').style.display = 'block';
+    
+    // 更新标题
+    document.querySelector('.header h1').innerText = '📋 规则详情';
+    
+    // 加载规则详情
+    await loadRuleDetail(ruleId);
+}
+
+// 返回执行列表
+function backToExecutor() {
+    currentRuleId = null;
+    document.getElementById('ruleDetailView').style.display = 'none';
+    document.getElementById('executorView').style.display = 'grid';
+    document.querySelector('.header h1').innerText = '⚡ 量化规则执行 Agent';
+    
+    // 刷新规则列表
+    loadExecutionRules();
+}
+
+// 加载规则详情
+async function loadRuleDetail(ruleId) {
+    const infoContent = document.getElementById('ruleInfoContent');
+    const ordersBody = document.getElementById('ruleOrdersTableBody');
+    
+    infoContent.innerHTML = '<div class="loading">加载中...</div>';
+    ordersBody.innerHTML = '<tr><td colspan="8" class="loading">加载中...</td></tr>';
+    
     try {
-        const response = await fetch('/api/my_rules');
+        const response = await fetch(`/api/rules/${ruleId}/detail`);
         const data = await response.json();
-
+        
         if (data.success) {
-            if (data.rules.length === 0) {
-                list.innerHTML = '<div class="no-data">暂无保存的策略</div>';
-                return;
-            }
-
-            let html = '';
-            data.rules.forEach(rule => {
-                // 确保content是对象
-                let content = rule.content;
-                if (typeof content === 'string') {
-                    try { content = JSON.parse(content); } catch (e) { }
-                }
-
-                // 提取关键信息
-                const req = content.user_requirements || {};
-                const summary = `${req.exchange || '未指定'} | ${req.product || ''} | ${req.symbols ? req.symbols.join(',') : ''} | ${req.timeframe || ''}`;
-
-                html += `
-                <div class="rule-card">
-                    <div class="rule-header">
-                        <span class="rule-id">策略 #${rule.id}</span>
-                        <span class="rule-date">${new Date(rule.created_at).toLocaleString()}</span>
-                    </div>
-                    <div class="rule-summary">${summary}</div>
-                    <div class="rule-details">
-                         ${req.entry_rules ? '<div>建仓: ' + req.entry_rules + '</div>' : ''}
-                    </div>
-                </div>
-                `;
-            });
-            list.innerHTML = html;
+            renderRuleInfo(data.rule);
+            renderRuleOrders(data.orders);
         } else {
-            list.innerHTML = '加载失败: ' + data.error;
+            infoContent.innerHTML = '<div class="error">加载失败: ' + data.error + '</div>';
+            ordersBody.innerHTML = '<tr><td colspan="8" class="no-data">加载失败</td></tr>';
         }
     } catch (error) {
-        list.innerHTML = '加载错误: ' + error.message;
+        infoContent.innerHTML = '<div class="error">加载错误: ' + error.message + '</div>';
+        ordersBody.innerHTML = '<tr><td colspan="8" class="no-data">加载错误</td></tr>';
     }
 }
 
-function closeMyRulesModal() {
-    document.getElementById('myRulesModal').style.display = 'none';
+// 渲染规则信息
+function renderRuleInfo(rule) {
+    const infoContent = document.getElementById('ruleInfoContent');
+    const statusBadge = document.getElementById('ruleStatusBadge');
+    const titleElement = document.getElementById('ruleDetailTitle');
+    
+    const req = rule.content.user_requirements || {};
+    const runtimeStatus = rule.content.runtime_status || {};
+    const isRunning = rule.status === 'running';
+    
+    // 更新标题和状态
+    titleElement.textContent = `📋 ${rule.name || '规则 #' + rule.id}`;
+    statusBadge.className = `exec-status-badge ${isRunning ? 'exec-status-running' : 'exec-status-stopped'}`;
+    statusBadge.textContent = isRunning ? '运行中' : '已停止';
+    
+    // 产品类型映射
+    const productMap = { "spot": "现货", "contract": "合约", "futures": "期货", "options": "期权" };
+    
+    // 构建紧凑型信息网格
+    let html = `
+        <!-- 第一行：5个字段 -->
+        <div class="info-row row-5">
+            <div class="info-item">
+                <span class="info-label">规则ID</span>
+                <span class="info-value">#${rule.id}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">交易所</span>
+                <span class="info-value">${req.exchange || '-'}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">产品类型</span>
+                <span class="info-value">${productMap[req.product] || req.product || '-'}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">交易对</span>
+                <span class="info-value">${req.symbols ? req.symbols.join(', ') : '-'}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">K线周期</span>
+                <span class="info-value">${req.timeframe || '-'}</span>
+            </div>
+        </div>
+        <!-- 第二行：5个字段 -->
+        <div class="info-row row-5">
+            <div class="info-item">
+                <span class="info-label">总本金</span>
+                <span class="info-value">$${rule.total_capital || '-'}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">最大仓位</span>
+                <span class="info-value">${req.max_position_ratio ? (req.max_position_ratio * 100) + '%' : '-'}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">止盈规则</span>
+                <span class="info-value">${req.take_profit || '-'}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">止损规则</span>
+                <span class="info-value">${req.stop_loss || '-'}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">创建时间</span>
+                <span class="info-value">${rule.created_at ? new Date(rule.created_at).toLocaleString() : '-'}</span>
+            </div>
+        </div>
+        <!-- 第三行：建仓规则 -->
+        <div class="info-row row-full">
+            <div class="info-item">
+                <span class="info-label">建仓规则</span>
+                <span class="info-value">${req.entry_rules || '-'}</span>
+            </div>
+        </div>
+    `;
+    
+    // 执行计划（如果有）
+    if (req.execute_plan) {
+        html += `
+        <div class="info-row row-full">
+            <div class="info-item">
+                <span class="info-label">执行计划</span>
+                <span class="info-value execute-plan">${formatExecutePlan(req.execute_plan)}</span>
+            </div>
+        </div>
+        `;
+    }
+    
+    // 运行时状态（如果有）
+    if (Object.keys(runtimeStatus).length > 0) {
+        html += `
+        <div class="info-row row-full">
+            <div class="info-item">
+                <span class="info-label">运行时状态</span>
+                <span class="info-value"><pre>${JSON.stringify(runtimeStatus, null, 2)}</pre></span>
+            </div>
+        </div>
+        `;
+    }
+    
+    infoContent.innerHTML = html;
+}
+
+// 渲染规则相关订单
+function renderRuleOrders(orders) {
+    const tableBody = document.getElementById('ruleOrdersTableBody');
+    
+    if (!orders || orders.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="8" class="no-data">暂无订单数据</td></tr>';
+        return;
+    }
+    
+    tableBody.innerHTML = orders.map(order => `
+        <tr>
+            <td>${order.order_id || order.id}</td>
+            <td>${order.created_at ? new Date(order.created_at).toLocaleString() : '-'}</td>
+            <td>${order.symbol}</td>
+            <td class="side-${order.side.toLowerCase()}">${order.side === 'buy' ? '买入' : '卖出'}</td>
+            <td>$${order.price ? order.price.toFixed(2) : '-'}</td>
+            <td>${order.amount ? order.amount.toFixed(6) : '-'}</td>
+            <td><span class="order-status-${order.status}">${order.status === 'open' ? '持仓中' : '已平仓'}</span></td>
+            <td class="${order.pnl >= 0 ? 'pnl-plus' : 'pnl-minus'}">${order.pnl != null ? (order.pnl >= 0 ? '+' : '') + order.pnl.toFixed(2) + '%' : '-'}</td>
+        </tr>
+    `).join('');
 }
 

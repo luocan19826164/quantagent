@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify, render_template, session
 from flask_cors import CORS
 import uuid
 import os
+import json
 import logging
 from dotenv import load_dotenv
 
@@ -39,6 +40,10 @@ SUPPORTED_MODELS = {
 }
 
 load_dotenv()
+# Debug: Print loaded keys (masked)
+print(f"DEBUG: OPENAI_API_KEY present: {'OPENAI_API_KEY' in os.environ}")
+print(f"DEBUG: DEEPSEEK_API_KEY present: {'DEEPSEEK_API_KEY' in os.environ}")
+print(f"DEBUG: DEEPSEEK_API_KEY value len: {len(os.environ.get('DEEPSEEK_API_KEY', ''))}")
 
 app = Flask(
     __name__,
@@ -46,8 +51,20 @@ app = Flask(
     static_folder='../frontend/static'
 )
 app.secret_key = os.getenv("SECRET_KEY", "quant-agent-secret-key-2024")
+
+# 屏蔽心跳接口的访问日志
+class PollingLogFilter(logging.Filter):
+    def filter(self, record):
+        if hasattr(record, 'args') and len(record.args) > 0:
+            request_line = str(record.args[0])
+            if '/api/my_rules' in request_line or '/api/orders' in request_line:
+                return 0
+        return 1
+
+logging.getLogger('werkzeug').addFilter(PollingLogFilter())
 app.config['PERMANENT_SESSION_LIFETIME'] = 60 * 60 * 24 * 7  # 7 days
-CORS(app)
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # 允许同站点请求携带 cookie
+CORS(app, supports_credentials=True)
 
 # 全局会话管理器
 session_manager = SessionManager()
@@ -176,6 +193,70 @@ def toggle_rule(rule_id):
             success = execution_agent.stop_rule_execution(rule_id)
             
         return jsonify({"success": success})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/rules/<int:rule_id>/detail', methods=['GET'])
+def get_rule_detail(rule_id):
+    """获取规则详情及其相关订单"""
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+        
+    try:
+        conn = database.get_db_connection()
+        c = conn.cursor()
+        
+        # 获取规则详情（验证用户权限）
+        c.execute('''
+            SELECT * FROM saved_rules 
+            WHERE id = ? AND user_id = ?
+        ''', (rule_id, session['user_id']))
+        rule_row = c.fetchone()
+        
+        if not rule_row:
+            conn.close()
+            return jsonify({"success": False, "error": "规则不存在或无权限访问"}), 404
+        
+        # 获取该规则的所有订单
+        c.execute('''
+            SELECT * FROM orders 
+            WHERE rule_id = ?
+            ORDER BY created_at DESC
+        ''', (rule_id,))
+        order_rows = c.fetchall()
+        conn.close()
+        
+        # 构建规则信息
+        rule = {
+            "id": rule_row['id'],
+            "name": rule_row['name'],
+            "content": json.loads(rule_row['rule_content']),
+            "total_capital": rule_row['total_capital'],
+            "status": rule_row['status'],
+            "created_at": rule_row['created_at']
+        }
+        
+        # 构建订单列表
+        orders = []
+        for r in order_rows:
+            orders.append({
+                "id": r['id'],
+                "order_id": r['order_id'],
+                "symbol": r['symbol'],
+                "side": r['side'],
+                "amount": r['amount'],
+                "price": r['price'],
+                "status": r['status'],
+                "pnl": r['pnl'],
+                "created_at": r['created_at']
+            })
+        
+        return jsonify({
+            "success": True,
+            "rule": rule,
+            "orders": orders
+        })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -564,6 +645,33 @@ def get_my_rules():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+def resume_running_rules():
+    """恢复之前标记为 running 的策略执行"""
+    global execution_agent
+    try:
+        conn = database.get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT id FROM saved_rules WHERE status = 'running'")
+        running_rules = c.fetchall()
+        conn.close()
+        
+        if running_rules:
+            logging.info(f"Found {len(running_rules)} running rules to resume")
+            if execution_agent is None:
+                execution_agent = QuantExecutionAgent(database)
+            
+            for rule in running_rules:
+                rule_id = rule['id']
+                success = execution_agent.start_rule_execution(rule_id)
+                if success:
+                    logging.info(f"✅ Resumed rule {rule_id}")
+                else:
+                    logging.warning(f"⚠️ Failed to resume rule {rule_id}")
+        else:
+            logging.info("No running rules to resume")
+    except Exception as e:
+        logging.error(f"Error resuming running rules: {e}")
+
 
 if __name__ == '__main__':
     # 初始化数据库
@@ -571,10 +679,21 @@ if __name__ == '__main__':
         database.init_db()
     except Exception as e:
         print(f"❌ 数据库初始化失败: {e}")
+    
+    # 从环境变量获取 debug 模式，默认为 False
+    # 标准 Flask 做法是检查 FLASK_DEBUG 环境变量 (1/True/true 为开启)
+    flask_debug = os.environ.get('FLASK_DEBUG', '0').lower() in ['1', 'true', 'on']
+    
+    # 恢复运行中的策略
+    # 逻辑：
+    # 1. 如果不是 DEBUG 模式 -> 直接运行 (生产环境单进程)
+    # 2. 如果是 DEBUG 模式 -> 仅在 reloader 子进程 (WERKZEUG_RUN_MAIN='true') 中运行，跳过主进程
+    if not flask_debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        resume_running_rules()
         
     app.run(
         host='0.0.0.0',
         port=8081,
-        debug=True
+        debug=flask_debug
     )
 

@@ -37,8 +37,7 @@
             <header class="header">
                 <div class="header-content">
                     <div>
-                        <h1>🤖 量化规则收集 Agent</h1>
-                        <p class="subtitle">通过对话完善你的量化交易策略</p>
+                        <h1 id="headerTitle">🤖 量化规则收集 Agent</h1>
                     </div>
                     <div class="user-controls">
                         <div class="model-and-actions" id="headerModelActions">
@@ -47,12 +46,9 @@
                                 <option value="openai:gpt-4o">GPT-4o</option>
                                 <option value="openai:gpt-4o-mini">GPT-4o-mini</option>
                             </select>
-                            <button id="resetBtn" class="btn-icon header-icon" title="重置会话">🔄</button>
                         </div>
                         <span id="userInfo" style="display: none; margin-right: 15px;"></span>
                         <button id="authBtn" class="btn btn-secondary" onclick="showAuthModal()">登录 / 注册</button>
-                        <button id="myRulesBtn" class="btn btn-outline" style="display: none;"
-                            onclick="showMyRules()">我的策略</button>
                         <button id="logoutBtn" class="btn btn-outline" style="display: none;"
                             onclick="logout()">退出</button>
                     </div>
@@ -89,40 +85,63 @@
             </div>
 
             <!-- 执行Agent页面 (默认隐藏) -->
-            <div id="executorView" class="main-content" style="display: none;">
-                <!-- 左侧：策略列表 -->
-                <div class="rules-execution-section">
-                    <div class="section-header">
-                        <h2>📚 运行中的策略</h2>
-                    </div>
+            <div id="executorView" class="main-content executor-view" style="display: none;">
+                <!-- 策略列表（全宽） -->
+                <div class="rules-execution-section full-width">
                     <div id="executionRulesList" class="execution-rules-grid">
                         <div class="loading">正在加载您的策略...</div>
                     </div>
                 </div>
+            </div>
 
-                <!-- 右侧：订单历史 -->
-                <div class="orders-section">
-                    <div class="section-header">
-                        <h2>📝 订单历史</h2>
+            <!-- 规则详情页面 (默认隐藏) -->
+            <div id="ruleDetailView" class="main-content rule-detail-view" style="display: none;">
+                <div class="rule-detail-container">
+                    <!-- 返回按钮 -->
+                    <div class="detail-header">
+                        <button class="btn btn-outline back-btn" onclick="backToExecutor()">
+                            ← 返回列表
+                        </button>
+                        <h2 id="ruleDetailTitle">📋 规则详情</h2>
                     </div>
-                    <div id="ordersList" class="orders-table-container">
-                        <table class="orders-table">
-                            <thead>
-                                <tr>
-                                    <th>时间</th>
-                                    <th>交易对</th>
-                                    <th>方向</th>
-                                    <th>价格</th>
-                                    <th>数量</th>
-                                    <th>盈亏</th>
-                                </tr>
-                            </thead>
-                            <tbody id="ordersTableBody">
-                                <tr>
-                                    <td colspan="6" class="no-data">暂无订单数据</td>
-                                </tr>
-                            </tbody>
-                        </table>
+                    
+                    <!-- 规则信息卡片 -->
+                    <div class="rule-info-section">
+                        <div class="section-header">
+                            <h3>📊 规则配置</h3>
+                            <span id="ruleStatusBadge" class="exec-status-badge"></span>
+                        </div>
+                        <div id="ruleInfoContent" class="rule-info-grid">
+                            <div class="loading">加载中...</div>
+                        </div>
+                    </div>
+                    
+                    <!-- 历史订单表格 -->
+                    <div class="rule-orders-section">
+                        <div class="section-header">
+                            <h3>📝 相关订单历史</h3>
+                        </div>
+                        <div class="orders-table-container">
+                            <table class="orders-table">
+                                <thead>
+                                    <tr>
+                                        <th>订单ID</th>
+                                        <th>时间</th>
+                                        <th>交易对</th>
+                                        <th>方向</th>
+                                        <th>价格</th>
+                                        <th>数量</th>
+                                        <th>状态</th>
+                                        <th>盈亏</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ruleOrdersTableBody">
+                                    <tr>
+                                        <td colspan="8" class="no-data">暂无订单数据</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -181,21 +200,6 @@
                     <input type="password" id="regPassword" placeholder="设置密码">
                 </div>
                 <button class="btn btn-success full-width" onclick="performRegister()">注册并自动登录</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- 我的策略列表 模态框 -->
-    <div id="myRulesModal" class="modal">
-        <div class="modal-content" style="max-width: 800px;">
-            <div class="modal-header">
-                <h2>📚 我的策略库</h2>
-                <span class="close" onclick="closeMyRulesModal()">&times;</span>
-            </div>
-            <div class="modal-body">
-                <div id="rulesList" class="rules-list">
-                    <div class="loading">加载中...</div>
-                </div>
             </div>
         </div>
     </div>

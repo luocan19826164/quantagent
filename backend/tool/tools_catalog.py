@@ -112,103 +112,9 @@ def validate_exchange_product_symbol(exchange: str, product: str, symbol: str) -
 
 
 
-# ============ 指标能力（仅定义参数与返回结构） ============
 
 @tool
-def indicator_ma(period: int) -> float:
-    """
-    简单移动平均（MA）。
-    参数：
-      - period: int，范围 [1, 500]
-    返回：
-      - 当前周期的 MA 数值（float）
-    适用：
-      - 趋势跟随、均线突破、金叉/死叉（与双均线一起使用）
-    限制：
-      - 仅定义能力，未提供真实数据计算；需结合收盘价 close 等基础数据。
-    示例：
-      - 价格突破 MA(30) 视为看多信号。
-    """
-    raise NotImplementedError("指标计算由LLM自行分析历史K线数据完成，此处仅为能力定义")
-
-
-@tool
-def indicator_ema(period: int) -> float:
-    """
-    指数移动平均（EMA）。
-    参数：
-      - period: int，范围 [1, 500]
-    返回：
-      - 当前周期的 EMA 数值（float）
-    适用：
-      - 更敏感的趋势判断、双均线交叉（快/慢 EMA）
-    限制：
-      - 仅能力声明；需结合 close 数据。
-    示例：
-      - EMA(12) 向上穿越 EMA(26) 视为金叉。
-    """
-    raise NotImplementedError("指标计算由LLM自行分析历史K线数据完成，此处仅为能力定义")
-
-
-@tool
-def indicator_rsi(period: int) -> float:
-    """
-    相对强弱指标（RSI）。
-    参数：
-      - period: int，范围 [2, 100]
-    返回：
-      - RSI 数值（float，区间 0–100）
-    适用：
-      - 超买超卖（>70 超买，<30 超卖）
-    限制：
-      - 仅能力声明；阈值需由策略指定。
-    示例：
-      - RSI(14) < 30 视为超卖。
-    """
-    raise NotImplementedError("指标计算由LLM自行分析历史K线数据完成，此处仅为能力定义")
-
-
-@tool
-def indicator_macd(fast: int, slow: int, signal: int) -> Dict[str, float]:
-    """
-    MACD 指标。
-    参数：
-      - fast:   int，范围 [2, 50]
-      - slow:   int，范围 [fast+1, 100]
-      - signal: int，范围 [1, 50]
-    返回：
-      - {"dif": float, "dea": float, "hist": float}
-    适用：
-      - 金叉/死叉（DIF 与 DEA 交叉）、柱体由负转正或回落。
-    限制：
-      - 仅能力声明；阈值/交叉方向由策略指定。
-    示例：
-      - DIF 上穿 DEA 视为金叉。
-    """
-    raise NotImplementedError("指标计算由LLM自行分析历史K线数据完成，此处仅为能力定义")
-
-
-@tool
-def indicator_boll(period: int, std: float) -> Dict[str, float]:
-    """
-    布林带（BOLL）。
-    参数：
-      - period: int，范围 [5, 100]
-      - std:    float，范围 [0.5, 3.0]
-    返回：
-      - {"upper": float, "middle": float, "lower": float}
-    适用：
-      - 突破上轨/下轨、回归中轨等策略。
-    限制：
-      - 仅能力声明；突破判定由策略指定。
-    示例：
-      - 收盘价上穿上轨视为突破。
-    """
-    raise NotImplementedError("指标计算由LLM自行分析历史K线数据完成，此处仅为能力定义")
-
-
-@tool
-def get_kline_data(exchange: str, symbol: str, timeframe: str, limit: int = 100) -> List[Dict[str, float]]:
+def get_kline_data(exchange: str, symbol: str, timeframe: str, limit: int = 100, mock: bool = False) -> List[Dict[str, float]]:
     """
     获取K线数据。
     
@@ -221,6 +127,7 @@ def get_kline_data(exchange: str, symbol: str, timeframe: str, limit: int = 100)
     返回：
       - [{"time": int, "open": float, "high": float, "low": float, "close": float, "volume": float}, ...]
     """
+    # mock 参数保留供扩展使用，当前逻辑不变
     if exchange == "Binance":
         client = get_binance_client()
         return client.get_kline_data(symbol, timeframe, limit)
@@ -228,7 +135,7 @@ def get_kline_data(exchange: str, symbol: str, timeframe: str, limit: int = 100)
 
 
 @tool
-def place_order(exchange: str, symbol: str, side: str, order_type: str, quantity: float, price: float = None) -> Dict[str, Any]:
+def place_order(exchange: str, symbol: str, side: str, order_type: str, quantity: float, price: float = None, mock: bool = False) -> Dict[str, Any]:
     """
     执行下单操作。
     
@@ -244,6 +151,24 @@ def place_order(exchange: str, symbol: str, side: str, order_type: str, quantity
     返回：
       - {"order_id": str, "status": str, "price": float, "quantity": float}
     """
+    import uuid
+    from datetime import datetime
+    
+    # mock 模式：返回模拟订单信息
+    if mock:
+        mock_order_id = f"mock_{uuid.uuid4().hex[:12]}"
+        return {
+            "order_id": mock_order_id,
+            "status": "FILLED",
+            "symbol": symbol,
+            "side": side,
+            "order_type": order_type,
+            "quantity": quantity,
+            "price": price,  # 可能为 None，由调用方处理
+            "filled_at": datetime.now().isoformat(),
+            "mock": True
+        }
+    
     if exchange == "Binance":
         client = get_binance_client()
         return client.place_order(symbol, side, order_type, quantity, price)
@@ -259,11 +184,6 @@ ALL_TOOLS: List[Any] = [
     validate_exchange_product_symbol,
     get_kline_data,
     place_order,
-    indicator_ma,
-    indicator_ema,
-    indicator_rsi,
-    indicator_macd,
-    indicator_boll,
 ]
 
 

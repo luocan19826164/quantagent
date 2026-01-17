@@ -31,6 +31,7 @@ echo "🚀 启动程序: http://localhost:8081"
 echo "按 Ctrl+C 停止"
 echo ""
 
-# 启动应用
+# 启动应用（开启 debug 模式）
+export FLASK_DEBUG=1
 python backend/app.py
 

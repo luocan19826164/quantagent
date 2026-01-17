@@ -19,7 +19,6 @@ output_schema: |
       "stop_loss": null,
       "total_capital": null,
       "max_position_ratio": null,
-      "indicators_required": [],
       "execute_plan": null,
       "finish": false
     }
@@ -60,14 +59,14 @@ field_instructions: |
      - 有效示例：exchange="Binance", symbols=["BTCUSDT"]（Binance支持BTCUSDT）
      - 无效示例：exchange="NYSE", symbols=["BTCUSDT"]（NYSE不支持加密货币交易对）
   
-  4. timeframe: K线周期
+  4. timeframe: K线周期（单一时间周期）
      - 可选值："1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"
      - 映射关系：
        * 1分钟 → 1m
        * 5分钟 → 5m
        * 1小时 → 1h
        * 日线 → 1d
-     - **极其重要**：如果用户提到的策略涉及多个时间周期（例如：日线趋势+1小时进场），你必须在 `timeframe` 字段中填写**最小**的那个周期（在此例中为 "1h"），以确保执行Agent能以足够的频率检查信号。
+     - **重要限制**：当前系统只支持单一时间周期。如果用户策略涉及多个时间周期（如"日线趋势+1小时进场"），需要引导用户简化为单一周期策略，或选择其中一个周期作为主要判断依据。
   
   5. entry_rules: 建仓规则的文字描述（必须是完整、可执行的规则）
      - 完整规则示例：
@@ -98,13 +97,6 @@ field_instructions: |
   9. total_capital: 总本金
      - 格式：正数，代表该策略可动用的总金额
   
-  10. indicators_required: 需要的技术指标数组
-     - 可选值：["MA", "EMA", "RSI", "MACD", "BOLL", "KDJ", "ATR", "VOLUME", "OBV", "SAR"]
-     - 中文映射：
-       * 均线 → MA
-       * 指数均线 → EMA
-       * 相对强弱 → RSI
-       * 布林带 → BOLL
   
   11. execute_plan: 执行计划（伪代码级别的步骤说明）
       - 生成时机：当所有参数（exchange, product, symbols, timeframe, entry_rules, take_profit, stop_loss, total_capital, max_position_ratio）收集完毕后的【第一时间】自动生成。
@@ -125,9 +117,8 @@ field_instructions: |
   - 增量更新：只更新本轮对话中明确提到的字段，未提到的字段必须保持null或空数组[]
   - 格式规范：严格按照上述格式要求填写，timeframe必须用缩写形式
   - 语义理解：理解同义词和上下文，如"做多"="买入"="开仓"，"获利"="止盈"
-  - 数组累加：symbols和indicators_required字段如果之前已有值，新值应追加而非替换
+  - 数组累加：symbols字段如果之前已有值，新值应追加而非替换
   - 完整性判断：对于entry_rules，只有当用户提供了完整、可执行的建仓条件时才填写，模糊或不完整的描述应该继续追问而非直接赋值
-  - 指标要求：只有当entry_rules中包含具体可执行条件时，才填写indicators_required字段
 
 # =============================================================================
 # Few-shot示例（直接文本，已格式化好）
@@ -171,7 +162,6 @@ examples: |
   示例4 - 完整的建仓规则：
   用户："当RSI低于30且MACD金叉时买入"
   state_update: {
-    "indicators_required": ["RSI", "MACD"],
     "entry_rules": "RSI低于30且MACD金叉时买入",
     其他字段保持null或[]
   }
@@ -179,7 +169,6 @@ examples: |
   示例5 - 模糊的建仓规则（不满足完整建仓条件）：
   用户："想在RSI超卖时买入"
   state_update: {
-    "indicators_required": [],
     "entry_rules": null,
     注意：这只是初步想法，需要继续询问具体的RSI阈值和完整的建仓条件
   }

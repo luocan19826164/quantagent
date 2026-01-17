@@ -28,18 +28,22 @@ class QuantRuleState:
             "finish": False,  # 策略是否收集完成且可执行
         }
         
-        self.runtime_status: Dict[str, Any] = {
-            "is_holding": False,      # 是否持仓
-            "entry_price": None,      # 开仓价格
-            "quantity": 0.0,          # 持仓数量（base 资产，如 BTC 数量）- **平仓时必须使用此字段**
-            "position_side": None,     # 持仓方向：'long'（多头）或 'short'（空头），仅合约使用
-            "last_update": None       # 最后更新时间
-        }
+        # runtime_status 按 symbol 分别存储每个交易对的持仓状态
+        # 结构: { "BTCUSDT": {...}, "ETHUSDT": {...} }
+        # 每个 symbol 的状态结构:
+        # {
+        #     "is_holding": False,      # 是否持仓
+        #     "entry_price": None,      # 开仓价格
+        #     "quantity": 0.0,          # 持仓数量（base 资产）
+        #     "position_side": None,    # 持仓方向：'long' 或 'short'（合约用）
+        #     "db_order_id": None,      # 数据库订单 ID
+        #     "last_update": None       # 最后更新时间
+        # }
+        self.runtime_status: Dict[str, Dict[str, Any]] = {}
         
         self.execution_logic: Dict[str, Any] = {
             "steps": [],  # 执行步骤
             "tools_used": [],  # 使用的工具
-            "indicators_used": [],  # 使用的指标
             "analysis": ""  # 逻辑分析
         }
         
@@ -65,11 +69,7 @@ class QuantRuleState:
         if tool not in self.execution_logic["tools_used"]:
             self.execution_logic["tools_used"].append(tool)
     
-    def add_indicator_used(self, indicator: str):
-        """记录使用的指标"""
-        if indicator not in self.execution_logic["indicators_used"]:
-            self.execution_logic["indicators_used"].append(indicator)
-    
+
     def set_analysis(self, analysis: str):
         """设置逻辑分析"""
         self.execution_logic["analysis"] = analysis
@@ -173,10 +173,6 @@ class QuantRuleState:
                 elif not isinstance(value, list):
                     summary += f"• {field_name}: {display_value}\n"
         
-        # 执行逻辑
-        if self.execution_logic["indicators_used"]:
-            summary += f"\n【使用的指标】\n"
-            summary += f"• {', '.join(self.execution_logic['indicators_used'])}\n"
         
         # 完整性检查
         is_complete, missing = self.check_completeness()

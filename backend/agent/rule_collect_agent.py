@@ -232,14 +232,6 @@ class QuantRuleCollectorAgent:
             else:
                 logging.warning(f"无效的总本金: {capital}")
         
-        # 指标验证（数组累加）
-        if su.get("indicators_required"):
-            valid_indicators = ["MA", "EMA", "RSI", "MACD", "BOLL", "KDJ", "ATR", "VOLUME", "OBV", "SAR"]
-            for ind in su["indicators_required"]:
-                if ind in valid_indicators:
-                    self.state.add_indicator_used(ind)
-                else:
-                    logging.warning(f"无效的指标: {ind}")
         
         # 执行计划（仅在策略完善后生成）
         if su.get("execute_plan"):
