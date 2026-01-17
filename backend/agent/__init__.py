@@ -1,9 +1,14 @@
 """
 Agent模块初始化
+统一导出所有 Agent 相关接口
 """
 
-from .rule_collect_agent import QuantRuleCollectorAgent
-from .state_manager import SessionManager, QuantRuleState
+from .rule_collect_agent import (
+    QuantRuleCollectorAgent,
+    QuantExecutionAgent,
+    SessionManager,
+    QuantRuleState,
+)
 from tool.tools_catalog import (
     list_exchanges,
     list_products_by_exchange,
@@ -19,6 +24,7 @@ from tool.capability_manifest import (
 
 __all__ = [
     'QuantRuleCollectorAgent',
+    'QuantExecutionAgent',
     'SessionManager',
     'QuantRuleState',
     'list_exchanges',

@@ -11,8 +11,7 @@ import json
 import logging
 from dotenv import load_dotenv
 
-from agent import SessionManager, QuantRuleCollectorAgent
-from agent.execution_agent import QuantExecutionAgent
+from agent import SessionManager, QuantRuleCollectorAgent, QuantExecutionAgent
 import database  # 引入数据库模块
 
 # 先加载环境变量，再导入配置模块

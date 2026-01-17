@@ -470,7 +470,12 @@ function switchAgent(mode) {
 
     const collectorView = document.getElementById('collectorView');
     const executorView = document.getElementById('executorView');
+    const ruleDetailView = document.getElementById('ruleDetailView');
     const headerTitle = document.querySelector('.header h1');
+
+    // 切换时先隐藏所有视图
+    if (ruleDetailView) ruleDetailView.style.display = 'none';
+    currentRuleId = null;  // 重置当前规则ID
 
     if (mode === 'collector') {
         document.getElementById('navRuleCollector').classList.add('active');
