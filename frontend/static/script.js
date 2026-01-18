@@ -1,8 +1,19 @@
 // 全局变量
 let sessionId = null;
 let finalRulesData = null;
-let currentModel = "openrouter:anthropic/claude-sonnet-4";
-let currentChatMode = 'collector'; // 'collector' or 'executor'
+let currentModel = "deepseek:deepseek-chat";  // 默认使用 DeepSeek Chat
+let currentChatMode = 'collector'; // 'collector' or 'executor' or 'code_agent'
+
+// ==========================================
+// 代码 Agent 全局变量
+// ==========================================
+let codeAgentCurrentProject = null;
+let codeAgentCurrentFile = null;
+let codeAgentFiles = [];
+let codeAgentIsEditing = false;
+let codeAgentExecutingTaskId = null;
+let codeAgentExecutionStartTime = null;
+let codeAgentTimer = null;
 
 // 页面加载完成后初始化
 // 页面加载完成后初始化
@@ -460,6 +471,15 @@ window.onclick = function (event) {
 // Agent 切换逻辑
 // ==========================================
 
+// 退出全屏模式，返回规则收集页面
+function exitFullscreenMode() {
+    const appWrapper = document.querySelector('.app-wrapper');
+    if (appWrapper) {
+        appWrapper.classList.remove('fullscreen-mode');
+    }
+    switchAgent('collector');
+}
+
 function switchAgent(mode) {
     if (mode === currentChatMode) return;
 
@@ -470,24 +490,41 @@ function switchAgent(mode) {
 
     const collectorView = document.getElementById('collectorView');
     const executorView = document.getElementById('executorView');
+    const codeAgentView = document.getElementById('codeAgentView');
     const ruleDetailView = document.getElementById('ruleDetailView');
     const headerTitle = document.querySelector('.header h1');
+    const appWrapper = document.querySelector('.app-wrapper');
+    const header = document.querySelector('.header');
 
     // 切换时先隐藏所有视图
     if (ruleDetailView) ruleDetailView.style.display = 'none';
     currentRuleId = null;  // 重置当前规则ID
 
+    // 隐藏所有主视图
+    if (collectorView) collectorView.style.display = 'none';
+    if (executorView) executorView.style.display = 'none';
+    if (codeAgentView) codeAgentView.style.display = 'none';
+
     if (mode === 'collector') {
         document.getElementById('navRuleCollector').classList.add('active');
         if (collectorView) collectorView.style.display = 'grid';
-        if (executorView) executorView.style.display = 'none';
         if (headerTitle) headerTitle.innerText = '🤖 量化规则收集 Agent';
-    } else {
+        // 显示侧边栏
+        if (appWrapper) appWrapper.classList.remove('fullscreen-mode');
+    } else if (mode === 'executor') {
         document.getElementById('navRuleExecutor').classList.add('active');
-        if (collectorView) collectorView.style.display = 'none';
         if (executorView) executorView.style.display = 'grid';
         if (headerTitle) headerTitle.innerText = '⚡ 量化规则执行 Agent';
         loadExecutionRules();
+        // 显示侧边栏
+        if (appWrapper) appWrapper.classList.remove('fullscreen-mode');
+    } else if (mode === 'code_agent') {
+        document.getElementById('navCodeAgent').classList.add('active');
+        if (codeAgentView) codeAgentView.style.display = 'grid';
+        if (headerTitle) headerTitle.innerText = '💻 量化代码 Agent';
+        // 隐藏侧边栏，进入全屏模式
+        if (appWrapper) appWrapper.classList.add('fullscreen-mode');
+        loadCodeAgentProjects();
     }
 }
 
@@ -990,5 +1027,1075 @@ function renderRuleOrders(orders) {
             <td class="${order.pnl >= 0 ? 'pnl-plus' : 'pnl-minus'}">${order.pnl != null ? (order.pnl >= 0 ? '+' : '') + order.pnl.toFixed(2) + '%' : '-'}</td>
         </tr>
     `).join('');
+}
+
+// ==========================================
+// 代码 Agent 逻辑
+// ==========================================
+
+// 加载项目列表
+async function loadCodeAgentProjects() {
+    try {
+        const response = await fetch('/api/code-agent/projects');
+        const data = await response.json();
+        
+        if (data.success) {
+            renderCodeAgentProjects(data.projects);
+        } else {
+            console.error('加载项目失败:', data.error);
+        }
+    } catch (error) {
+        console.error('加载项目错误:', error);
+    }
+}
+
+// 渲染项目选择器
+function renderCodeAgentProjects(projects) {
+    const selector = document.getElementById('projectSelector');
+    if (!selector) return;
+    
+    let options = '<option value="">选择项目...</option>';
+    projects.forEach(project => {
+        options += `<option value="${project.id}">${project.name}</option>`;
+    });
+    selector.innerHTML = options;
+    
+    // 如果当前有选中的项目，保持选中
+    if (codeAgentCurrentProject) {
+        selector.value = codeAgentCurrentProject;
+    }
+}
+
+// 创建新项目
+async function createCodeAgentProject() {
+    const name = prompt('请输入项目名称:', '新量化项目');
+    if (!name) return;
+    
+    try {
+        const response = await fetch('/api/code-agent/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            codeAgentCurrentProject = data.project.id;
+            await loadCodeAgentProjects();
+            document.getElementById('projectSelector').value = codeAgentCurrentProject;
+            await loadCodeAgentFiles();
+            clearCodeAgentChat();
+        } else {
+            alert('创建失败: ' + data.error);
+        }
+    } catch (error) {
+        alert('创建错误: ' + error.message);
+    }
+}
+
+// 选择项目
+async function selectCodeAgentProject(projectId) {
+    if (!projectId) {
+        codeAgentCurrentProject = null;
+        codeAgentFiles = [];
+        renderCodeAgentFileTree([]);
+        clearCodeAgentEditor();
+        return;
+    }
+    
+    codeAgentCurrentProject = projectId;
+    await loadCodeAgentFiles();
+    clearCodeAgentChat();
+}
+
+// 删除项目
+async function deleteCodeAgentProject() {
+    if (!codeAgentCurrentProject) {
+        alert('请先选择一个项目');
+        return;
+    }
+    
+    if (!confirm('确定要删除这个项目吗？所有文件将被删除。')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}`, {
+            method: 'DELETE'
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            codeAgentCurrentProject = null;
+            codeAgentFiles = [];
+            await loadCodeAgentProjects();
+            renderCodeAgentFileTree([]);
+            clearCodeAgentEditor();
+        } else {
+            alert('删除失败: ' + data.error);
+        }
+    } catch (error) {
+        alert('删除错误: ' + error.message);
+    }
+}
+
+// 加载项目文件
+async function loadCodeAgentFiles() {
+    if (!codeAgentCurrentProject) return;
+    
+    try {
+        const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/files`);
+        const data = await response.json();
+        
+        if (data.success) {
+            codeAgentFiles = data.files;
+            renderCodeAgentFileTree(data.files);
+        } else {
+            console.error('加载文件失败:', data.error);
+        }
+    } catch (error) {
+        console.error('加载文件错误:', error);
+    }
+}
+
+// 渲染文件树
+function renderCodeAgentFileTree(files) {
+    const container = document.getElementById('fileTree');
+    if (!container) return;
+    
+    if (files.length === 0) {
+        container.innerHTML = '<div class="file-tree-placeholder">暂无文件，开始对话生成代码</div>';
+        return;
+    }
+    
+    // 按路径排序
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    
+    let html = '';
+    files.forEach(file => {
+        const icon = file.type === 'directory' ? '📁' : '📄';
+        const indent = (file.path.split('/').length - 1);
+        const selectedClass = (codeAgentCurrentFile === file.path) ? 'selected' : '';
+        const typeClass = file.type === 'directory' ? 'dir' : '';
+        
+        html += `<div class="file-tree-item ${typeClass} ${selectedClass} indent-${indent}" 
+                     onclick="selectCodeAgentFile('${file.path}')" 
+                     data-path="${file.path}">
+            <span class="file-icon">${icon}</span>
+            <span class="file-name">${file.name}</span>
+        </div>`;
+    });
+    
+    container.innerHTML = html;
+}
+
+// 选择文件
+async function selectCodeAgentFile(filePath) {
+    if (!codeAgentCurrentProject) return;
+    
+    codeAgentCurrentFile = filePath;
+    
+    // 更新文件树选中状态
+    document.querySelectorAll('.file-tree-item').forEach(item => {
+        item.classList.remove('selected');
+        if (item.dataset.path === filePath) {
+            item.classList.add('selected');
+        }
+    });
+    
+    // 加载文件内容
+    try {
+        const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/files/${encodeURIComponent(filePath)}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            displayCodeAgentFile(filePath, data.content);
+        } else {
+            console.error('加载文件失败:', data.error);
+        }
+    } catch (error) {
+        console.error('加载文件错误:', error);
+    }
+}
+
+// 显示文件内容
+function displayCodeAgentFile(filePath, content) {
+    const fileName = document.getElementById('currentFileName');
+    const codeDisplay = document.getElementById('codeDisplay');
+    const codeTextarea = document.getElementById('codeTextarea');
+    
+    if (fileName) fileName.textContent = filePath;
+    
+    // 确定语言类型
+    const ext = filePath.split('.').pop().toLowerCase();
+    const langMap = {
+        'py': 'python',
+        'js': 'javascript',
+        'json': 'json',
+        'yaml': 'yaml',
+        'yml': 'yaml',
+        'md': 'markdown',
+        'txt': 'plaintext'
+    };
+    const language = langMap[ext] || 'plaintext';
+    
+    if (codeDisplay) {
+        codeDisplay.className = `code-display language-${language}`;
+        codeDisplay.textContent = content;
+        // 使用 Prism.js 高亮
+        if (window.Prism) {
+            Prism.highlightElement(codeDisplay);
+        }
+    }
+    
+    if (codeTextarea) {
+        codeTextarea.value = content;
+    }
+    
+    // 默认显示高亮视图
+    exitCodeAgentEditMode();
+}
+
+// 进入编辑模式
+function enterCodeAgentEditMode() {
+    codeAgentIsEditing = true;
+    
+    const codeDisplay = document.getElementById('codeDisplay');
+    const codeTextarea = document.getElementById('codeTextarea');
+    const editBtn = document.getElementById('editFileBtn');
+    const saveBtn = document.getElementById('saveFileBtn');
+    const cancelBtn = document.getElementById('cancelEditBtn');
+    
+    if (codeDisplay) codeDisplay.style.display = 'none';
+    if (codeTextarea) codeTextarea.style.display = 'block';
+    if (editBtn) editBtn.style.display = 'none';
+    if (saveBtn) saveBtn.style.display = 'inline-block';
+    if (cancelBtn) cancelBtn.style.display = 'inline-block';
+}
+
+// 退出编辑模式
+function exitCodeAgentEditMode() {
+    codeAgentIsEditing = false;
+    
+    const codeDisplay = document.getElementById('codeDisplay');
+    const codeTextarea = document.getElementById('codeTextarea');
+    const editBtn = document.getElementById('editFileBtn');
+    const saveBtn = document.getElementById('saveFileBtn');
+    const cancelBtn = document.getElementById('cancelEditBtn');
+    
+    if (codeDisplay) codeDisplay.style.display = 'block';
+    if (codeTextarea) codeTextarea.style.display = 'none';
+    if (editBtn) editBtn.style.display = 'inline-block';
+    if (saveBtn) saveBtn.style.display = 'none';
+    if (cancelBtn) cancelBtn.style.display = 'none';
+}
+
+// 保存文件
+async function saveCodeAgentFile() {
+    if (!codeAgentCurrentProject || !codeAgentCurrentFile) return;
+    
+    const textarea = document.getElementById('codeTextarea');
+    if (!textarea) return;
+    
+    try {
+        const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/files/${encodeURIComponent(codeAgentCurrentFile)}`, {
+            method: 'PUT',  // 使用 PUT 方法
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: textarea.value })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            // 更新高亮显示
+            displayCodeAgentFile(codeAgentCurrentFile, textarea.value);
+        } else {
+            alert('保存失败: ' + data.error);
+        }
+    } catch (error) {
+        alert('保存错误: ' + error.message);
+    }
+}
+
+// 取消编辑
+function cancelCodeAgentEdit() {
+    // 重新加载文件内容
+    if (codeAgentCurrentFile) {
+        selectCodeAgentFile(codeAgentCurrentFile);
+    }
+}
+
+// 清空编辑器
+function clearCodeAgentEditor() {
+    codeAgentCurrentFile = null;
+    const fileName = document.getElementById('currentFileName');
+    const codeDisplay = document.getElementById('codeDisplay');
+    const codeTextarea = document.getElementById('codeTextarea');
+    
+    if (fileName) fileName.textContent = '未选择文件';
+    if (codeDisplay) {
+        codeDisplay.className = 'code-display';
+        codeDisplay.textContent = '';
+    }
+    if (codeTextarea) codeTextarea.value = '';
+    
+    exitCodeAgentEditMode();
+}
+
+// 清空聊天记录
+function clearCodeAgentChat() {
+    const container = document.getElementById('codeAgentMessages');
+    if (container) {
+        container.innerHTML = '<div class="bot-message">你好！我是量化代码 Agent，可以帮你生成 Python 量化程序。请描述你想要实现的功能。</div>';
+    }
+}
+
+// 发送消息给代码 Agent（SSE 流式）
+async function sendCodeAgentMessage() {
+    const input = document.getElementById('codeAgentInput');
+    const sendBtn = document.getElementById('codeAgentSendBtn');
+    const message = input.value.trim();
+    
+    if (!message) return;
+    
+    if (!codeAgentCurrentProject) {
+        alert('请先选择或创建一个项目');
+        return;
+    }
+    
+    // 显示用户消息
+    appendCodeAgentMessage('user', message);
+    input.value = '';
+    input.disabled = true;
+    sendBtn.disabled = true;
+    
+    // 创建 bot 消息容器
+    const botDiv = appendCodeAgentMessage('bot', '');
+    let fullResponse = '';
+    let codeChanges = [];
+    
+    try {
+        const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: message })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            botDiv.innerHTML = formatCodeAgentMessage('错误: ' + (error.error || '未知错误'));
+            return;
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            
+            // 处理 SSE 事件
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        
+                        // 处理新的事件类型
+                        if (data.type === 'status') {
+                            // 状态消息
+                            fullResponse += `💬 ${data.message}\n`;
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
+                        } else if (data.type === 'execution_started') {
+                            // 执行开始
+                            fullResponse += `\n🚀 **开始执行计划**\n`;
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
+                        } else if (data.type === 'plan_created') {
+                            // 显示计划
+                            fullResponse += `\n📋 **执行计划** (共 ${data.plan.steps.length} 步):\n`;
+                            data.plan.steps.forEach((step, idx) => {
+                                fullResponse += `${idx + 1}. ${step.description}\n`;
+                            });
+                            fullResponse += '\n';
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
+                        } else if (data.type === 'step_started') {
+                            // 步骤开始
+                            fullResponse += `\n🔄 **Step ${data.step_id}**: ${data.description}\n`;
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
+                        } else if (data.type === 'step_output') {
+                            // 步骤输出内容
+                            fullResponse += data.content;
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
+                        } else if (data.type === 'tool_calls') {
+                            // 工具调用
+                            fullResponse += '\n  🔧 工具调用: ';
+                            fullResponse += data.calls.map(c => c.name).join(', ') + '\n';
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
+                        } else if (data.type === 'tool_result') {
+                            // 工具执行结果
+                            const icon = data.success ? '✅' : '❌';
+                            fullResponse += `  ${icon} ${data.tool}`;
+                            if (data.error) {
+                                fullResponse += `: ${data.error}`;
+                            }
+                            fullResponse += '\n';
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
+                            
+                            // 如果是文件写入操作，实时刷新文件列表
+                            if (data.success && ['write_file', 'patch_file', 'delete_file'].includes(data.tool)) {
+                                loadCodeAgentFiles();
+                            }
+                        } else if (data.type === 'step_completed') {
+                            // 步骤完成
+                            const progress = data.progress;
+                            fullResponse += `  ✅ 完成 (${progress.done}/${progress.total})\n`;
+                            if (data.files_changed && data.files_changed.length > 0) {
+                                fullResponse += `  📁 文件变更: ${data.files_changed.join(', ')}\n`;
+                                codeChanges.push(...data.files_changed.map(f => ({ path: f })));
+                                // 实时刷新文件列表
+                                loadCodeAgentFiles();
+                            }
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
+                        } else if (data.type === 'step_error') {
+                            // 步骤错误
+                            fullResponse += `  ❌ 错误: ${data.error}\n`;
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
+                        } else if (data.type === 'plan_completed') {
+                            // 计划完成
+                            fullResponse += `\n🎉 **计划执行完成！**\n`;
+                            if (data.summary) {
+                                fullResponse += data.summary + '\n';
+                            }
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse);
+                        } else if (data.type === 'content') {
+                            // 旧的 content 类型兼容
+                            fullResponse += data.content;
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
+                        } else if (data.type === 'code_change') {
+                            codeChanges.push(data.change);
+                        } else if (data.type === 'done') {
+                            // 完成，移除光标
+                            botDiv.innerHTML = formatCodeAgentMessage(fullResponse);
+                        } else if (data.type === 'error') {
+                            botDiv.innerHTML = formatCodeAgentMessage('错误: ' + data.error);
+                        }
+                        
+                        // 滚动到底部
+                        botDiv.parentElement.scrollTop = botDiv.parentElement.scrollHeight;
+                    } catch (e) {
+                        console.error('Parse SSE error:', e, line);
+                    }
+                }
+            }
+        }
+        
+        // 显示代码变更
+        if (codeChanges.length > 0) {
+            displayCodeChanges(codeChanges);
+        }
+        
+        // 刷新文件列表
+        await loadCodeAgentFiles();
+        
+        // 如果有新文件，自动选择第一个
+        if (codeChanges.length > 0 && !codeAgentCurrentFile) {
+            selectCodeAgentFile(codeChanges[0].path);
+        }
+        
+    } catch (error) {
+        botDiv.innerHTML = formatCodeAgentMessage('发送失败: ' + error.message);
+    } finally {
+        input.disabled = false;
+        sendBtn.disabled = false;
+        input.focus();
+    }
+}
+
+// 追加聊天消息
+function appendCodeAgentMessage(type, message) {
+    const container = document.getElementById('codeAgentMessages');
+    const div = document.createElement('div');
+    div.className = type === 'user' ? 'user-message' : 'bot-message';
+    div.innerHTML = formatCodeAgentMessage(message);
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+    return div;
+}
+
+// 格式化代码 Agent 消息（支持 Markdown）
+function formatCodeAgentMessage(message) {
+    if (!message) return '';
+    
+    // 先处理代码块（避免内部内容被其他规则处理）
+    const codeBlocks = [];
+    let formatted = message.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+        const placeholder = `__CODE_BLOCK_${codeBlocks.length}__`;
+        codeBlocks.push(`<pre><code class="language-${lang || 'plaintext'}">${escapeHtml(code)}</code></pre>`);
+        return placeholder;
+    });
+    
+    // 转义 HTML（代码块已经单独处理）
+    formatted = escapeHtml(formatted);
+    
+    // 恢复代码块占位符
+    codeBlocks.forEach((block, i) => {
+        formatted = formatted.replace(`__CODE_BLOCK_${i}__`, block);
+    });
+    
+    // 处理标题 ## xxx
+    formatted = formatted.replace(/^## (.+)$/gm, '<strong style="font-size: 1.1em;">$1</strong>');
+    formatted = formatted.replace(/^### (.+)$/gm, '<strong>$1</strong>');
+    
+    // 处理粗体 **text**
+    formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    
+    // 处理斜体 *text* （但不匹配 ** 粗体）
+    formatted = formatted.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+    
+    // 处理行内代码 `code`
+    formatted = formatted.replace(/`([^`]+)`/g, '<code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 3px;">$1</code>');
+    
+    // 处理列表项 - item
+    formatted = formatted.replace(/^- (.+)$/gm, '• $1');
+    
+    // 处理换行
+    formatted = formatted.replace(/\n/g, '<br>');
+    
+    return formatted;
+}
+
+// 显示代码变更
+function displayCodeChanges(changes) {
+    const panel = document.getElementById('codePanelContent');
+    if (!panel) return;
+    
+    let html = '';
+    changes.forEach(change => {
+        html += `
+            <div class="code-change-item">
+                <div class="code-change-header">${change.path}</div>
+                <div class="code-change-content">
+                    <pre><code class="language-python">${escapeHtml(change.content)}</code></pre>
+                </div>
+            </div>
+        `;
+    });
+    
+    panel.innerHTML = html;
+    
+    // Prism 高亮
+    if (window.Prism) {
+        panel.querySelectorAll('code').forEach(block => {
+            Prism.highlightElement(block);
+        });
+    }
+}
+
+// 切换代码面板
+function toggleCodePanel() {
+    const panel = document.querySelector('.code-panel-section');
+    const btn = document.getElementById('togglePanelBtn');
+    
+    if (panel) {
+        panel.classList.toggle('collapsed');
+        if (btn) {
+            btn.textContent = panel.classList.contains('collapsed') ? '展开' : '收起';
+        }
+    }
+}
+
+// ==========================================
+// 代码执行功能
+// ==========================================
+
+// 运行代码（SSE 流式）
+async function runCodeAgentCode() {
+    if (!codeAgentCurrentProject || !codeAgentCurrentFile) {
+        alert('请先选择要执行的文件');
+        return;
+    }
+    
+    if (codeAgentExecutingTaskId) {
+        alert('已有代码在执行中');
+        return;
+    }
+    
+    const timeoutSelect = document.getElementById('executionTimeout');
+    const timeout = timeoutSelect ? timeoutSelect.value : '300';
+    
+    // 根据超时值转换格式
+    let timeoutStr = '5min';
+    const timeoutNum = parseInt(timeout);
+    if (timeoutNum === 60) timeoutStr = '1min';
+    else if (timeoutNum === 300) timeoutStr = '5min';
+    else if (timeoutNum === 1800) timeoutStr = '30min';
+    else if (timeoutNum === 0) timeoutStr = 'unlimited';
+    
+    codeAgentExecutingTaskId = 'running';
+    codeAgentExecutionStartTime = Date.now();
+    startExecutionTimer();
+    updateExecutionStatus('running', '执行中...');
+    
+    const outputContainer = document.getElementById('executionOutput');
+    if (outputContainer) outputContainer.innerHTML = '';
+    
+    try {
+        const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                file_path: codeAgentCurrentFile,
+                timeout: timeoutStr
+            })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            updateExecutionStatus('error', error.error || '执行失败');
+            codeAgentExecutingTaskId = null;
+            stopExecutionTimer();
+            return;
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            
+            // 处理 SSE 数据
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        handleExecutionEvent(data);
+                    } catch (e) {
+                        // 忽略解析错误
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.error('执行错误:', error);
+        updateExecutionStatus('error', '执行失败: ' + error.message);
+    } finally {
+        stopExecutionTimer();
+        codeAgentExecutingTaskId = null;
+    }
+}
+
+// 停止执行
+async function stopCodeAgentExecution() {
+    if (!codeAgentExecutingTaskId || !codeAgentCurrentProject) return;
+    
+    try {
+        const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/stop`, {
+            method: 'POST'
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            updateExecutionStatus('error', '已停止');
+        } else {
+            console.error('停止失败:', data.error);
+        }
+    } catch (error) {
+        console.error('停止错误:', error);
+    }
+}
+
+// 处理执行事件
+function handleExecutionEvent(data) {
+    const outputContainer = document.getElementById('executionOutput');
+    if (!outputContainer) return;
+    
+    if (data.type === 'stdout' || data.type === 'stderr') {
+        const line = document.createElement('div');
+        line.className = `output-line output-${data.type}`;
+        line.textContent = data.content;
+        outputContainer.appendChild(line);
+        outputContainer.scrollTop = outputContainer.scrollHeight;
+    } else if (data.type === 'exit') {
+        stopExecutionTimer();
+        codeAgentExecutingTaskId = null;
+        
+        if (data.exit_code === 0) {
+            updateExecutionStatus('success', `完成 (${formatDuration(data.duration)})`);
+        } else if (data.exit_code === -1) {
+            updateExecutionStatus('error', '超时终止');
+        } else {
+            updateExecutionStatus('error', `退出码: ${data.exit_code}`);
+        }
+    } else if (data.type === 'error') {
+        stopExecutionTimer();
+        codeAgentExecutingTaskId = null;
+        updateExecutionStatus('error', data.content);
+    }
+}
+
+// 更新执行状态
+function updateExecutionStatus(status, message) {
+    const statusDiv = document.getElementById('executionStatus');
+    const runBtn = document.getElementById('runCodeBtn');
+    const stopBtn = document.getElementById('stopCodeBtn');
+    
+    if (statusDiv) {
+        statusDiv.className = `execution-status ${status}`;
+        statusDiv.innerHTML = `<span>${message}</span><span id="executionTimer"></span>`;
+    }
+    
+    if (status === 'running') {
+        if (runBtn) runBtn.disabled = true;
+        if (stopBtn) stopBtn.disabled = false;
+    } else {
+        if (runBtn) runBtn.disabled = false;
+        if (stopBtn) stopBtn.disabled = true;
+    }
+}
+
+// 启动执行计时器
+function startExecutionTimer() {
+    codeAgentTimer = setInterval(() => {
+        const timerSpan = document.getElementById('executionTimer');
+        if (timerSpan && codeAgentExecutionStartTime) {
+            const elapsed = Date.now() - codeAgentExecutionStartTime;
+            timerSpan.textContent = ` (${formatDuration(elapsed / 1000)})`;
+        }
+    }, 1000);
+}
+
+// 停止执行计时器
+function stopExecutionTimer() {
+    if (codeAgentTimer) {
+        clearInterval(codeAgentTimer);
+        codeAgentTimer = null;
+    }
+}
+
+// 格式化时长
+function formatDuration(seconds) {
+    if (seconds < 60) {
+        return `${seconds.toFixed(1)}秒`;
+    } else if (seconds < 3600) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}分${secs}秒`;
+    } else {
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        return `${hours}时${mins}分`;
+    }
+}
+
+// ==========================================
+// 代码 Agent 事件监听器
+// ==========================================
+
+// 在 DOMContentLoaded 中初始化代码 Agent 事件监听器
+document.addEventListener('DOMContentLoaded', () => {
+    // 项目选择器
+    const projectSelector = document.getElementById('projectSelector');
+    if (projectSelector) {
+        projectSelector.addEventListener('change', (e) => selectCodeAgentProject(e.target.value));
+    }
+    
+    // 创建项目按钮
+    const createProjectBtn = document.getElementById('createProjectBtn');
+    if (createProjectBtn) {
+        createProjectBtn.addEventListener('click', createCodeAgentProject);
+    }
+    
+    // 删除项目按钮
+    const deleteProjectBtn = document.getElementById('deleteProjectBtn');
+    if (deleteProjectBtn) {
+        deleteProjectBtn.addEventListener('click', deleteCodeAgentProject);
+    }
+    
+    // 聊天发送按钮
+    const codeAgentSendBtn = document.getElementById('codeAgentSendBtn');
+    if (codeAgentSendBtn) {
+        codeAgentSendBtn.addEventListener('click', sendCodeAgentMessage);
+    }
+    
+    // 聊天输入框回车发送
+    const codeAgentInput = document.getElementById('codeAgentInput');
+    if (codeAgentInput) {
+        codeAgentInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendCodeAgentMessage();
+            }
+        });
+    }
+    
+    // 编辑文件按钮
+    const editFileBtn = document.getElementById('editFileBtn');
+    if (editFileBtn) {
+        editFileBtn.addEventListener('click', enterCodeAgentEditMode);
+    }
+    
+    // 保存文件按钮
+    const saveFileBtn = document.getElementById('saveFileBtn');
+    if (saveFileBtn) {
+        saveFileBtn.addEventListener('click', saveCodeAgentFile);
+    }
+    
+    // 取消编辑按钮
+    const cancelEditBtn = document.getElementById('cancelEditBtn');
+    if (cancelEditBtn) {
+        cancelEditBtn.addEventListener('click', cancelCodeAgentEdit);
+    }
+    
+    // 切换代码面板按钮
+    const togglePanelBtn = document.getElementById('togglePanelBtn');
+    if (togglePanelBtn) {
+        togglePanelBtn.addEventListener('click', toggleCodePanel);
+    }
+    
+    // 运行代码按钮
+    const runCodeBtn = document.getElementById('runCodeBtn');
+    if (runCodeBtn) {
+        runCodeBtn.addEventListener('click', runCodeAgentCode);
+    }
+    
+    // 停止执行按钮
+    const stopCodeBtn = document.getElementById('stopCodeBtn');
+    if (stopCodeBtn) {
+        stopCodeBtn.addEventListener('click', stopCodeAgentExecution);
+    }
+    
+    // 命令输入框回车执行
+    const commandInput = document.getElementById('commandInput');
+    if (commandInput) {
+        commandInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                executeCommandStream(commandInput.value);
+                commandInput.value = '';
+            }
+        });
+    }
+    
+    // 清空输出按钮
+    const clearOutputBtn = document.getElementById('clearOutputBtn');
+    if (clearOutputBtn) {
+        clearOutputBtn.addEventListener('click', clearExecutionOutput);
+    }
+});
+
+// ==========================================
+// Shell 命令流式执行
+// ==========================================
+
+// 当前正在执行的命令进程 ID
+let currentCommandProcessId = null;
+let commandEventSource = null;
+
+/**
+ * 流式执行 shell 命令
+ */
+async function executeCommandStream(command) {
+    if (!command || !command.trim()) return;
+    if (!codeAgentCurrentProject) {
+        alert('请先选择一个项目');
+        return;
+    }
+    
+    const outputContainer = document.getElementById('executionOutput');
+    const commandSpinner = document.getElementById('commandSpinner');
+    const stopBtn = document.getElementById('stopCodeBtn');
+    const timeout = parseInt(document.getElementById('executionTimeout')?.value || '300');
+    
+    // 显示命令
+    appendExecutionOutput('command', `$ ${command}`);
+    
+    // 显示加载状态
+    if (commandSpinner) commandSpinner.style.display = 'inline';
+    if (stopBtn) stopBtn.disabled = false;
+    
+    // 启动计时器
+    codeAgentExecutionStartTime = Date.now();
+    startExecutionTimer();
+    updateExecutionStatus('running', '执行中...');
+    
+    try {
+        const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/run-command`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command, timeout })
+        });
+        
+        // 获取进程 ID
+        currentCommandProcessId = response.headers.get('X-Process-Id');
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            
+            // 处理 SSE 格式的数据
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        handleCommandEvent(data);
+                    } catch (e) {
+                        console.error('解析命令事件失败:', e);
+                    }
+                }
+            }
+        }
+        
+    } catch (error) {
+        console.error('命令执行错误:', error);
+        appendExecutionOutput('stderr', `错误: ${error.message}`);
+    } finally {
+        if (commandSpinner) commandSpinner.style.display = 'none';
+        stopExecutionTimer();
+        currentCommandProcessId = null;
+        if (stopBtn) stopBtn.disabled = true;
+    }
+}
+
+/**
+ * 处理命令执行事件
+ */
+function handleCommandEvent(data) {
+    switch (data.type) {
+        case 'started':
+            console.log('命令开始执行:', data.command, 'process_id:', data.process_id);
+            currentCommandProcessId = data.process_id;
+            break;
+            
+        case 'stdout':
+            appendExecutionOutput('stdout', data.data);
+            break;
+            
+        case 'stderr':
+            appendExecutionOutput('stderr', data.data);
+            break;
+            
+        case 'exit':
+            const exitClass = data.success ? 'exit-success' : 'exit-error';
+            appendExecutionOutput(exitClass, `[退出码: ${data.code}, 耗时: ${data.duration}秒]`);
+            updateExecutionStatus(data.success ? 'success' : 'error', 
+                `${data.success ? '完成' : '失败'} (${formatDuration(data.duration)})`);
+            break;
+            
+        case 'terminated':
+            appendExecutionOutput('terminated', `[进程已终止] ${data.message}`);
+            updateExecutionStatus('error', '已终止');
+            break;
+            
+        case 'error':
+            appendExecutionOutput('stderr', `错误: ${data.message}`);
+            updateExecutionStatus('error', data.message);
+            break;
+    }
+}
+
+/**
+ * 追加执行输出
+ */
+function appendExecutionOutput(type, text) {
+    const outputContainer = document.getElementById('executionOutput');
+    if (!outputContainer) return;
+    
+    // 移除占位符
+    const placeholder = outputContainer.querySelector('.output-placeholder');
+    if (placeholder) placeholder.remove();
+    
+    const line = document.createElement('div');
+    line.className = `output-line output-${type}`;
+    line.textContent = text;
+    outputContainer.appendChild(line);
+    
+    // 自动滚动到底部
+    outputContainer.scrollTop = outputContainer.scrollHeight;
+}
+
+/**
+ * 清空执行输出
+ */
+function clearExecutionOutput() {
+    const outputContainer = document.getElementById('executionOutput');
+    if (outputContainer) {
+        outputContainer.innerHTML = '<div class="output-placeholder">运行代码或执行命令，输出将实时显示在这里...</div>';
+    }
+}
+
+/**
+ * 终止当前命令
+ */
+async function terminateCurrentCommand() {
+    if (!currentCommandProcessId) {
+        console.log('没有正在运行的命令');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/terminate-command`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ process_id: currentCommandProcessId })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            appendExecutionOutput('terminated', '[命令已被用户终止]');
+        } else {
+            console.error('终止失败:', data.message);
+        }
+    } catch (error) {
+        console.error('终止命令错误:', error);
+    }
+}
+
+// 修改停止按钮行为，支持终止命令
+const originalStopCodeAgentExecution = typeof stopCodeAgentExecution === 'function' ? stopCodeAgentExecution : null;
+async function stopCodeAgentExecution() {
+    // 如果有正在执行的命令，先终止命令
+    if (currentCommandProcessId) {
+        await terminateCurrentCommand();
+    }
+    
+    // 然后调用原有的停止逻辑（如果存在）
+    if (codeAgentExecutingTaskId && originalStopCodeAgentExecution) {
+        // 原有逻辑
+        try {
+            const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/stop`, {
+                method: 'POST'
+            });
+            const data = await response.json();
+            if (data.success) {
+                updateExecutionStatus('error', '已停止');
+            }
+        } catch (error) {
+            console.error('停止错误:', error);
+        }
+    }
+    
+    stopExecutionTimer();
+    const stopBtn = document.getElementById('stopCodeBtn');
+    if (stopBtn) stopBtn.disabled = true;
 }
 

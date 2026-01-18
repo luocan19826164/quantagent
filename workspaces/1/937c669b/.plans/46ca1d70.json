@@ -1,0 +1,32 @@
+{
+  "id": "46ca1d70",
+  "task": "我想实现一个回测的代码，btc币种最近一年，当rsi（14）< 20就买入，买入后>60就卖出，有什么需要我确认的吗",
+  "steps": [
+    {
+      "id": 1,
+      "description": "执行任务: 我想实现一个回测的代码，btc币种最近一年，当rsi（14）< 20就买入，买入后>60就卖出，有什么需要我确认的吗",
+      "status": "pending",
+      "expected_outcome": "任务完成",
+      "tools_needed": [],
+      "started_at": null,
+      "completed_at": null,
+      "result": null,
+      "error": null,
+      "files_changed": []
+    }
+  ],
+  "current_step_id": 1,
+  "status": "awaiting_approval",
+  "created_at": "2026-01-18T10:49:50.228207",
+  "version": 1,
+  "replan_count": 0,
+  "progress": {
+    "total": 1,
+    "done": 0,
+    "failed": 0,
+    "pending": 1,
+    "progress_percent": 0,
+    "current_step": 1
+  },
+  "saved_at": "2026-01-18T10:49:50.228620"
+}

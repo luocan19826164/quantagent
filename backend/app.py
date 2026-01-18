@@ -12,6 +12,7 @@ import logging
 from dotenv import load_dotenv
 
 from agent import SessionManager, QuantRuleCollectorAgent, QuantExecutionAgent
+from agent.code_agent import CodeAgent, WorkspaceManager
 import database  # 引入数据库模块
 
 # 先加载环境变量，再导入配置模块
@@ -472,6 +473,13 @@ def switch_model(session_id):
         
         agent.switch_model(model_name, api_key, base_url, extra_headers)
         
+        # 更新全局 LLM 配置
+        set_current_llm_config(provider, model_name, api_key, base_url, extra_headers)
+        
+        # 清除 Code Agent 缓存，使其下次使用时采用新模型配置
+        code_agent_cache.clear()
+        logging.info(f"Model switched to {model_name}, Code Agent cache cleared")
+        
         return jsonify({
             "success": True,
             "message": f"已切换模型到 {model_name}",
@@ -667,6 +675,404 @@ def resume_running_rules():
             logging.info("No running rules to resume")
     except Exception as e:
         logging.error(f"Error resuming running rules: {e}")
+
+
+# ==========================================
+# 代码 Agent API 路由
+# ==========================================
+
+# 代码 Agent 实例缓存 {(user_id, project_id): CodeAgent}
+code_agent_cache = {}
+
+# 当前用户选择的模型配置（全局）
+current_llm_config = None
+
+
+def get_current_user_id():
+    """获取当前用户ID（需要登录）"""
+    user_id = session.get('user_id')
+    if not user_id:
+        return None
+    return user_id
+
+
+def get_current_llm_config():
+    """获取当前选择的 LLM 配置"""
+    global current_llm_config
+    return current_llm_config
+
+
+def set_current_llm_config(provider: str, model: str, api_key: str, base_url: str, extra_headers: dict = None):
+    """设置当前 LLM 配置"""
+    global current_llm_config
+    current_llm_config = {
+        "provider": provider,
+        "model": model,
+        "api_key": api_key,
+        "base_url": base_url,
+        "extra_headers": extra_headers
+    }
+    logging.info(f"Global LLM config set to: {provider}/{model}")
+
+
+def get_code_agent(user_id: int, project_id: str) -> CodeAgent:
+    """获取或创建代码 Agent 实例"""
+    cache_key = (user_id, project_id)
+    if cache_key not in code_agent_cache:
+        # 使用当前选择的模型配置
+        llm_config = get_current_llm_config()
+        code_agent_cache[cache_key] = CodeAgent(user_id, project_id, llm_config=llm_config)
+    return code_agent_cache[cache_key]
+
+
+@app.route('/api/code-agent/projects', methods=['GET'])
+def list_code_projects():
+    """获取用户所有项目"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    try:
+        workspace = WorkspaceManager(user_id)
+        projects = workspace.list_projects()
+        return jsonify({"success": True, "projects": projects})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects', methods=['POST'])
+def create_code_project():
+    """创建新项目"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    data = request.json or {}
+    name = data.get('name', '新项目')
+    description = data.get('description', '')
+    
+    try:
+        workspace = WorkspaceManager(user_id)
+        project = workspace.create_project(name, description)
+        return jsonify({"success": True, "project": project})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>', methods=['GET'])
+def get_code_project(project_id):
+    """获取项目详情"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    try:
+        workspace = WorkspaceManager(user_id)
+        project = workspace.get_project(project_id)
+        if not project:
+            return jsonify({"success": False, "error": "项目不存在"}), 404
+        return jsonify({"success": True, "project": project})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>', methods=['DELETE'])
+def delete_code_project(project_id):
+    """删除项目"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    try:
+        workspace = WorkspaceManager(user_id)
+        success = workspace.delete_project(project_id)
+        if not success:
+            return jsonify({"success": False, "error": "删除失败"}), 400
+        
+        # 清理缓存
+        cache_key = (user_id, project_id)
+        if cache_key in code_agent_cache:
+            del code_agent_cache[cache_key]
+        
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>/files', methods=['GET'])
+def get_code_files(project_id):
+    """获取项目文件树"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    try:
+        workspace = WorkspaceManager(user_id)
+        file_tree = workspace.get_file_tree(project_id)
+        return jsonify({"success": True, "files": file_tree})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>/files/<path:file_path>', methods=['GET'])
+def get_code_file_content(project_id, file_path):
+    """获取文件内容"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    try:
+        workspace = WorkspaceManager(user_id)
+        content = workspace.read_file(project_id, file_path)
+        if content is None:
+            return jsonify({"success": False, "error": "文件不存在"}), 404
+        return jsonify({"success": True, "content": content, "path": file_path})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>/files/<path:file_path>', methods=['PUT'])
+def save_code_file(project_id, file_path):
+    """保存文件"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    data = request.json or {}
+    content = data.get('content', '')
+    
+    try:
+        workspace = WorkspaceManager(user_id)
+        success = workspace.write_file(project_id, file_path, content)
+        if not success:
+            return jsonify({"success": False, "error": "保存失败"}), 400
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>/files/<path:file_path>', methods=['DELETE'])
+def delete_code_file(project_id, file_path):
+    """删除文件"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    try:
+        workspace = WorkspaceManager(user_id)
+        success = workspace.delete_file(project_id, file_path)
+        if not success:
+            return jsonify({"success": False, "error": "删除失败"}), 400
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>/chat', methods=['POST'])
+def code_agent_chat(project_id):
+    """
+    代码 Agent 聊天（SSE 流式）
+    """
+    from flask import Response, stream_with_context
+    
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    data = request.json or {}
+    message = data.get('message', '')
+    
+    if not message:
+        return jsonify({"success": False, "error": "消息不能为空"}), 400
+    
+    try:
+        agent = get_code_agent(user_id, project_id)
+        
+        def generate():
+            for event in agent.chat_stream(message):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        
+        return Response(
+            stream_with_context(generate()),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no'
+            }
+        )
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 404
+    except Exception as e:
+        logging.error(f"Code agent chat error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>/execute', methods=['POST'])
+def execute_code(project_id):
+    """
+    执行代码（SSE 流式）
+    """
+    from flask import Response, stream_with_context
+    
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    data = request.json or {}
+    file_path = data.get('file_path', '')
+    timeout = data.get('timeout', '5min')
+    
+    if not file_path:
+        return jsonify({"success": False, "error": "文件路径不能为空"}), 400
+    
+    try:
+        agent = get_code_agent(user_id, project_id)
+        
+        def generate():
+            for event in agent.execute_file(file_path, timeout):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        
+        return Response(
+            stream_with_context(generate()),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no'
+            }
+        )
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 404
+    except Exception as e:
+        logging.error(f"Code execution error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>/stop', methods=['POST'])
+def stop_code_execution(project_id):
+    """停止代码执行"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    try:
+        agent = get_code_agent(user_id, project_id)
+        success = agent.stop_execution()
+        return jsonify({"success": success})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>/run-command', methods=['POST'])
+def run_command_stream(project_id):
+    """
+    流式执行 shell 命令（SSE）
+    用户可以实时看到命令输出并可以终止
+    """
+    from flask import Response, stream_with_context
+    import uuid
+    from agent.code_agent.tools import ShellExecTool, process_manager
+    from agent.code_agent.workspace_manager import WorkspaceManager
+    
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    data = request.json or {}
+    command = data.get('command', '')
+    timeout = data.get('timeout', 300)  # 默认 5 分钟
+    
+    if not command:
+        return jsonify({"success": False, "error": "命令不能为空"}), 400
+    
+    try:
+        workspace = WorkspaceManager(user_id)
+        project = workspace.get_project(project_id)
+        if not project:
+            return jsonify({"success": False, "error": "项目不存在"}), 404
+        
+        project_path = workspace.get_project_path(project_id)
+        shell_tool = ShellExecTool(project_path, strict_mode=False)
+        
+        # 生成进程 ID
+        process_id = f"{user_id}_{project_id}_{uuid.uuid4().hex[:8]}"
+        
+        def generate():
+            for event in shell_tool.execute_stream(command, process_id, timeout=timeout):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        
+        return Response(
+            stream_with_context(generate()),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no',
+                'X-Process-Id': process_id  # 返回进程 ID 以便终止
+            }
+        )
+    except Exception as e:
+        logging.error(f"Run command error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/code-agent/projects/<project_id>/terminate-command', methods=['POST'])
+def terminate_command(project_id):
+    """终止正在执行的命令"""
+    from agent.code_agent.tools import process_manager
+    
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    data = request.json or {}
+    process_id = data.get('process_id', '')
+    
+    if not process_id:
+        return jsonify({"success": False, "error": "进程 ID 不能为空"}), 400
+    
+    # 验证进程 ID 属于当前用户
+    if not process_id.startswith(f"{user_id}_"):
+        return jsonify({"success": False, "error": "无权终止此进程"}), 403
+    
+    success = process_manager.terminate(process_id)
+    return jsonify({"success": success, "message": "进程已终止" if success else "进程不存在或已结束"})
+
+
+@app.route('/api/code-agent/projects/<project_id>/running-commands', methods=['GET'])
+def get_running_commands(project_id):
+    """获取正在运行的命令列表"""
+    from agent.code_agent.tools import process_manager
+    
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    # 过滤出当前用户的进程
+    all_running = process_manager.get_all_running()
+    user_processes = [p for p in all_running if p.startswith(f"{user_id}_{project_id}_")]
+    
+    return jsonify({
+        "success": True,
+        "processes": user_processes
+    })
+
+
+@app.route('/api/code-agent/projects/<project_id>/status', methods=['GET'])
+def get_code_agent_status(project_id):
+    """获取代码 Agent 状态"""
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "请先登录"}), 401
+    
+    try:
+        agent = get_code_agent(user_id, project_id)
+        return jsonify({
+            "success": True,
+            "status": agent.get_context_summary()
+        })
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 if __name__ == '__main__':

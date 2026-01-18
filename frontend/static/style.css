@@ -899,6 +899,12 @@ body {
     align-items: center;
 }
 
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
 .header h1 {
     margin: 0;
     font-size: 1rem;
@@ -906,6 +912,29 @@ body {
     color: rgba(255, 255, 255, 0.9);
 }
 
+/* 返回按钮（全屏模式显示） */
+.back-btn {
+    display: none;
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+    font-size: 18px;
+    cursor: pointer;
+    transition: all 0.2s;
+    align-items: center;
+    justify-content: center;
+}
+
+.back-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.app-wrapper.fullscreen-mode .back-btn {
+    display: flex;
+}
 
 .user-controls {
     display: flex;
@@ -1181,4 +1210,785 @@ body {
 .side-sell {
     color: #ef4444;
     font-weight: 500;
+}
+
+/* ==========================================
+   代码 Agent 视图样式 (Lovable 风格)
+   ========================================== */
+
+/* 隐藏侧边栏时的全屏模式 */
+.app-wrapper.fullscreen-mode .sidebar {
+    transform: translateX(-100%);
+    position: fixed;
+}
+
+.app-wrapper.fullscreen-mode .container {
+    margin-left: 0;
+    max-width: 100%;
+    padding: 0;
+}
+
+.app-wrapper.fullscreen-mode .header {
+    padding: 12px 20px;
+    margin-bottom: 0;
+    background: #0f172a;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* 代码 Agent 全屏视图 - 三栏布局 */
+.code-agent-view {
+    display: grid;
+    grid-template-columns: 340px 1fr 320px;  /* 左:聊天 中:代码 右:文件+终端 */
+    grid-template-rows: 1fr;
+    gap: 0;
+    height: calc(100vh - 60px);
+    max-height: calc(100vh - 60px);
+    overflow: hidden;
+    background: #1a1a2e;
+}
+
+/* 全屏模式下调整高度 */
+.app-wrapper.fullscreen-mode .code-agent-view {
+    height: calc(100vh - 52px);
+}
+
+/* 左侧聊天区域 - Lovable 风格 */
+.code-chat-section {
+    display: flex;
+    flex-direction: column;
+    background: #16213e;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    height: 100%; /* grid 子元素需要明确高度 */
+    max-height: 100%; /* 限制最大高度 */
+    overflow: hidden; /* 确保子元素可以滚动 */
+}
+
+.code-chat-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.code-chat-header h3 {
+    margin: 0;
+    font-size: 15px;
+    color: #e0e0e0;
+    font-weight: 500;
+}
+
+.code-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 0; /* 关键：flex 子元素需要这个才能在有限高度内滚动 */
+}
+
+.code-chat-messages .bot-message,
+.code-chat-messages .user-message {
+    max-width: 90%;
+    padding: 12px 16px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.code-chat-messages .bot-message {
+    background: rgba(255, 255, 255, 0.08);
+    color: #e0e0e0;
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+}
+
+.code-chat-messages .user-message {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: white;
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+}
+
+.code-chat-input-area {
+    padding: 16px 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    gap: 12px;
+    background: rgba(255, 255, 255, 0.02);
+    align-items: flex-end;
+}
+
+.code-chat-input-area textarea {
+    flex: 1;
+    padding: 12px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    resize: none;
+    font-size: 14px;
+    font-family: inherit;
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+    min-height: 48px;
+    max-height: 150px;
+}
+
+.code-chat-input-area textarea::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.code-chat-input-area textarea:focus {
+    outline: none;
+    border-color: #6366f1;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.code-chat-input-area textarea:disabled {
+    background: rgba(255, 255, 255, 0.02);
+    cursor: not-allowed;
+}
+
+.code-chat-input-area .send-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s, opacity 0.2s;
+}
+
+.code-chat-input-area .send-btn:hover {
+    transform: scale(1.05);
+}
+
+.code-chat-input-area .send-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* 中间代码面板 - 只显示代码内容 */
+.code-panel-section {
+    display: flex;
+    flex-direction: column;
+    background: #1e1e2e;
+    min-width: 0;
+    min-height: 0; /* 允许内容区域滚动 */
+    height: 100%;
+    border-left: 1px solid rgba(255, 255, 255, 0.05);
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+    overflow: hidden;
+}
+
+/* 文件编辑器占满整个中间面板 */
+.code-panel-section .file-editor-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.code-panel-header {
+    padding: 14px 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.code-panel-header h3 {
+    margin: 0;
+    font-size: 14px;
+    color: #a0a0a0;
+    font-weight: 500;
+}
+
+.code-panel-section.collapsed .code-panel-header h3 {
+    display: none;
+}
+
+.toggle-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: #a0a0a0;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.toggle-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #e0e0e0;
+}
+
+.code-panel-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.code-panel-section.collapsed .code-panel-content {
+    display: none;
+}
+
+.code-panel-placeholder {
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 14px;
+    text-align: center;
+    padding: 60px 20px;
+}
+
+.code-change-item {
+    margin-bottom: 16px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.code-change-header {
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #4ec9b0;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
+}
+
+.code-change-content {
+    padding: 0;
+}
+
+.code-change-content pre {
+    margin: 0;
+    padding: 14px;
+    overflow-x: auto;
+}
+
+.code-change-content code {
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+/* 右侧文件浏览器 - 文件列表 + 终端 */
+.file-browser-section {
+    display: flex;
+    flex-direction: column;
+    background: #16213e;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+    min-height: 0; /* 允许内部滚动 */
+    height: 100%;
+}
+
+/* 右侧文件树占据一半高度 */
+.file-browser-section .file-tree-container {
+    flex: 1 1 0;
+    min-height: 0;
+    height: 0; /* 关键：让文件列表在内部滚动 */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* 滚动交给 file-tree */
+}
+
+/* 右侧终端占据一半高度 */
+.file-browser-section .execution-output-container {
+    flex: 0 0 220px; /* 固定高度，避免挤压文件列表 */
+    display: flex;
+    flex-direction: column;
+    min-height: 180px;
+    max-height: 260px;
+}
+
+/* 项目选择器 - 暗色主题 */
+.project-selector {
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.project-selector select {
+    flex: 1;
+    padding: 10px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    font-size: 13px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+    cursor: pointer;
+}
+
+.project-selector select:focus {
+    outline: none;
+    border-color: #6366f1;
+}
+
+.project-selector select option {
+    background: #1a1a2e;
+    color: #e0e0e0;
+}
+
+.project-selector .btn-sm {
+    padding: 8px 14px;
+    font-size: 13px;
+    border-radius: 8px;
+}
+
+.project-selector .btn-primary {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    border: none;
+    color: white;
+}
+
+.project-selector .btn-danger {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #f87171;
+}
+
+.project-selector .btn-danger:hover {
+    background: rgba(239, 68, 68, 0.3);
+}
+
+/* 文件树 - 暗色主题 */
+.file-tree-container {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;  /* 让 flex 子元素可以收缩 */
+}
+
+.file-tree-header {
+    padding: 12px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    flex: 0 0 auto;
+}
+
+.file-tree-header h4 {
+    margin: 0;
+    font-size: 13px;
+    color: #a0a0a0;
+    font-weight: 500;
+}
+
+.file-tree-header .refresh-btn {
+    background: none;
+    border: none;
+    color: #a0a0a0;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.file-tree-header .refresh-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+}
+
+.file-tree {
+    padding: 8px 0;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.file-tree-placeholder {
+    padding: 30px 16px;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 13px;
+    text-align: center;
+}
+
+.file-tree-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #b0b0b0;
+    transition: all 0.15s;
+}
+
+.file-tree-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+}
+
+.file-tree-item.selected {
+    background: rgba(99, 102, 241, 0.2);
+    color: #a5b4fc;
+}
+
+.file-tree-item .file-icon {
+    margin-right: 10px;
+    font-size: 14px;
+}
+
+.file-tree-item.dir {
+    font-weight: 500;
+}
+
+.file-tree-item.indent-1 { padding-left: 32px; }
+.file-tree-item.indent-2 { padding-left: 48px; }
+.file-tree-item.indent-3 { padding-left: 64px; }
+
+/* 文件编辑器 - 暗色主题 */
+.file-editor-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;  /* 关键：让 flex 子元素可以滚动 */
+    height: 100%;
+}
+
+.file-editor-header {
+    padding: 12px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.02);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.file-editor-header span {
+    font-size: 13px;
+    color: #a0a0a0;
+    font-weight: 500;
+}
+
+.file-editor-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.file-editor-actions .btn-sm {
+    padding: 6px 12px;
+    font-size: 12px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: #b0b0b0;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.file-editor-actions .btn-sm:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #e0e0e0;
+}
+
+.file-editor-actions .btn-sm.btn-primary {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: white;
+}
+
+.file-editor-content {
+    flex: 1 1 0;
+    height: 0; /* 关键：让滚动生效 */
+    overflow-y: auto;
+    overflow-x: hidden;
+    position: relative;
+    background: #1e1e2e;
+    min-height: 0;  /* 关键：让 flex 子元素可以滚动 */
+}
+
+/* 代码显示容器 */
+#codeDisplayWrapper {
+    margin: 0;
+    padding: 0;
+    background: #1e1e2e;
+    min-height: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.code-display {
+    margin: 0;
+    padding: 16px;
+    background: #1e1e2e;
+    display: block;
+}
+
+/* 强制覆盖 Prism.js 主题的字体设置 */
+.code-display,
+.code-display *,
+.code-display .token,
+.code-display code,
+.code-display code[class*="language-"],
+pre[class*="language-"],
+code[class*="language-"] {
+    font-family: 'JetBrains Mono', 'Consolas', 'Monaco', monospace !important;
+    font-size: 12px !important;
+    line-height: 1.6 !important;
+}
+
+.file-editor-textarea {
+    width: 100%;
+    height: 100%;
+    padding: 16px;
+    border: none;
+    resize: none;
+    font-family: 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    background: #1e1e2e;
+    color: #d4d4d4;
+}
+
+.file-editor-textarea:focus {
+    outline: none;
+}
+
+/* 执行输出 - 暗色主题 */
+.execution-output-container {
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    max-height: 180px;
+    display: flex;
+    flex-direction: column;
+}
+
+.execution-output-header {
+    padding: 10px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 13px;
+    font-weight: 500;
+    color: #a0a0a0;
+}
+
+.execution-controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.timeout-selector {
+    padding: 6px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    font-size: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #b0b0b0;
+}
+
+.timeout-selector:focus {
+    outline: none;
+    border-color: #6366f1;
+}
+
+.execution-controls .btn-sm {
+    padding: 6px 14px;
+    font-size: 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.execution-controls .btn-success {
+    background: linear-gradient(135deg, #10b981, #059669);
+    border: none;
+    color: white;
+}
+
+.execution-controls .btn-danger {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #f87171;
+}
+
+.execution-output {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    background: #0d1117;
+    font-family: 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    color: #c9d1d9;
+    line-height: 1.6;
+}
+
+.execution-output-placeholder {
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 12px;
+}
+
+.execution-output .output-line {
+    margin: 2px 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.execution-output .output-stdout {
+    color: #d4d4d4;
+}
+
+.execution-output .output-stderr {
+    color: #f14c4c;
+}
+
+.execution-output .output-info {
+    color: #4ec9b0;
+}
+
+.execution-output .output-placeholder {
+    color: #6a6a6a;
+    font-style: italic;
+}
+
+/* 执行状态 */
+.execution-status {
+    padding: 8px 15px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.execution-status.running {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.execution-status.success {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.execution-status.error {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+/* 命令输入框 */
+.command-input-wrapper {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    background: #161b22;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    gap: 8px;
+}
+
+.command-prompt {
+    color: #7ee787;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+.command-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #c9d1d9;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 13px;
+}
+
+.command-input::placeholder {
+    color: #484f58;
+}
+
+.command-spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* 执行计时器 */
+.execution-timer {
+    position: absolute;
+    bottom: 8px;
+    right: 12px;
+    background: rgba(0, 0, 0, 0.6);
+    color: #7ee787;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 12px;
+}
+
+/* 执行输出容器相对定位 */
+.execution-output-container {
+    position: relative;
+}
+
+/* 输出行样式增强 */
+.execution-output .output-command {
+    color: #7ee787;
+    font-weight: bold;
+    margin-top: 8px;
+}
+
+.execution-output .output-exit-success {
+    color: #7ee787;
+    margin-top: 4px;
+    font-size: 11px;
+}
+
+.execution-output .output-exit-error {
+    color: #f85149;
+    margin-top: 4px;
+    font-size: 11px;
+}
+
+.execution-output .output-terminated {
+    color: #d29922;
+    font-style: italic;
+}
+
+/* 流式输出中的光标 */
+.typing-cursor {
+    display: inline-block;
+    width: 8px;
+    height: 16px;
+    background: var(--primary-color);
+    animation: blink 1s infinite;
+    vertical-align: middle;
+    margin-left: 2px;
+}
+
+@keyframes blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+}
+
+/* 代码 Agent 响应式 */
+@media (max-width: 1200px) {
+    .code-agent-view {
+        grid-template-columns: 280px 1fr 280px;
+    }
+}
+
+@media (max-width: 992px) {
+    .code-agent-view {
+        grid-template-columns: 1fr 260px;
+    }
+    
+    .code-chat-section {
+        display: none;
+    }
 }

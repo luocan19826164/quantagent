@@ -25,6 +25,10 @@
                     <span class="nav-icon">⚡</span>
                     <span class="nav-text">规则执行</span>
                 </a>
+                <a href="#" class="nav-item" id="navCodeAgent" onclick="switchAgent('code_agent')">
+                    <span class="nav-icon">💻</span>
+                    <span class="nav-text">量化代码</span>
+                </a>
             </nav>
             <div class="sidebar-footer">
                 <div id="userInfoHeader" class="user-info-mini"></div>
@@ -33,10 +37,13 @@
 
         <div class="container">
             <!-- 头部 -->
-            <!-- 头部 -->
             <header class="header">
                 <div class="header-content">
-                    <div>
+                    <div class="header-left">
+                        <!-- 全屏模式下的返回按钮 -->
+                        <button id="backToSidebarBtn" class="back-btn" onclick="exitFullscreenMode()" title="返回导航">
+                            <span>☰</span>
+                        </button>
                         <h1 id="headerTitle">🤖 量化规则收集 Agent</h1>
                     </div>
                     <div class="user-controls">
@@ -94,6 +101,91 @@
                 <div class="rules-execution-section full-width">
                     <div id="executionRulesList" class="execution-rules-grid">
                         <div class="loading">正在加载您的策略...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 代码 Agent 页面 (默认隐藏) -->
+            <div id="codeAgentView" class="main-content code-agent-view" style="display: none;">
+                <!-- 左侧：聊天区域 -->
+                <div class="code-chat-section">
+                    <div class="code-chat-header">
+                        <h3>💬 对话</h3>
+                    </div>
+                    <div id="codeAgentMessages" class="code-chat-messages">
+                        <div class="bot-message">你好！我是量化代码 Agent，可以帮你生成 Python 量化程序。请先选择或创建一个项目，然后描述你想要实现的功能。</div>
+                    </div>
+                    <div class="code-chat-input-area">
+                        <textarea id="codeAgentInput" placeholder="描述你想要的功能..." rows="3"></textarea>
+                        <button id="codeAgentSendBtn" class="send-btn">
+                            <span class="send-icon">↗️</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 中间：只显示代码内容 -->
+                <div class="code-panel-section" id="codePanelSection">
+                    <div class="file-editor-container">
+                        <div class="file-editor-header">
+                            <span id="currentFileName">未选择文件</span>
+                            <div class="file-editor-actions">
+                                <button class="btn btn-sm" id="editFileBtn">✏️ 编辑</button>
+                                <button class="btn btn-sm btn-primary" id="saveFileBtn" style="display: none;">💾 保存</button>
+                                <button class="btn btn-sm" id="cancelEditBtn" style="display: none;">取消</button>
+                            </div>
+                        </div>
+                        <div class="file-editor-content">
+                            <pre id="codeDisplayWrapper"><code id="codeDisplay" class="code-display language-python"></code></pre>
+                            <textarea id="codeTextarea" class="file-editor-textarea" style="display: none;"></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右侧：文件列表 + 终端 -->
+                <div class="file-browser-section">
+                    <!-- 项目选择器 -->
+                    <div class="project-selector">
+                        <select id="projectSelector">
+                            <option value="">选择项目...</option>
+                        </select>
+                        <button class="btn btn-sm btn-primary" id="createProjectBtn">+</button>
+                        <button class="btn btn-sm btn-danger" id="deleteProjectBtn" title="删除">🗑</button>
+                    </div>
+                    
+                    <!-- 文件树 -->
+                    <div class="file-tree-container">
+                        <div class="file-tree-header">
+                            <h4>📁 文件</h4>
+                            <button class="btn btn-sm" onclick="loadCodeAgentFiles()" title="刷新">🔄</button>
+                        </div>
+                        <div id="fileTree" class="file-tree">
+                            <div class="file-tree-placeholder">请选择项目</div>
+                        </div>
+                    </div>
+                    
+                    <!-- 终端 -->
+                    <div class="execution-output-container">
+                        <div class="execution-output-header">
+                            <span>📤 终端</span>
+                            <div class="execution-controls">
+                                <select id="executionTimeout" class="timeout-selector">
+                                    <option value="60">1分钟</option>
+                                    <option value="300" selected>5分钟</option>
+                                    <option value="1800">30分钟</option>
+                                </select>
+                                <button class="btn btn-sm btn-success" id="runCodeBtn" title="运行">▶</button>
+                                <button class="btn btn-sm btn-danger" id="stopCodeBtn" disabled title="停止">⏹</button>
+                            </div>
+                        </div>
+                        <div class="command-input-wrapper">
+                            <span class="command-prompt">$</span>
+                            <input type="text" id="commandInput" class="command-input" placeholder="输入命令..." />
+                            <span id="commandSpinner" class="command-spinner" style="display: none;">⏳</span>
+                        </div>
+                        <div id="executionStatus" class="execution-status" style="display: none;"></div>
+                        <div id="executionOutput" class="execution-output">
+                            <div class="output-placeholder">输出显示在这里...</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -207,6 +299,32 @@
             </div>
         </div>
     </div>
+
+    <!-- 创建项目模态框 -->
+    <div id="createProjectModal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2>📁 创建新项目</h2>
+                <span class="close" onclick="closeCreateProjectModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>项目名称</label>
+                    <input type="text" id="newProjectName" placeholder="我的量化策略">
+                </div>
+                <div class="form-group">
+                    <label>项目描述（可选）</label>
+                    <textarea id="newProjectDesc" placeholder="描述你的项目..." rows="2"></textarea>
+                </div>
+                <button class="btn btn-primary full-width" onclick="createProject()">创建项目</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Prism.js 代码高亮 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>

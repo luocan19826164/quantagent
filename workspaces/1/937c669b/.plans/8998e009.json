@@ -1,0 +1,32 @@
+{
+  "id": "8998e009",
+  "task": "我想实现一个回测的代码，btc币种最近一年，当rsi（14）< 20就买入，买入后>60就卖出，有什么需要我确认的吗",
+  "steps": [
+    {
+      "id": 1,
+      "description": "执行任务: 我想实现一个回测的代码，btc币种最近一年，当rsi（14）< 20就买入，买入后>60就卖出，有什么需要我确认的吗",
+      "status": "failed",
+      "expected_outcome": "任务完成",
+      "tools_needed": [],
+      "started_at": "2026-01-18T10:28:59.525582",
+      "completed_at": "2026-01-18T10:29:00.487283",
+      "result": null,
+      "error": "Error code: 402 - {'error': {'message': 'This request requires more credits, or fewer max_tokens. You requested up to 64000 tokens, but can only afford 60460. To increase, visit https://openrouter.ai/settings/credits and add more credits', 'code': 402, 'metadata': {'provider_name': None}}, 'user_id': 'user_2zqydhYPplMX5axnSrySwHt9kvH'}",
+      "files_changed": []
+    }
+  ],
+  "current_step_id": 1,
+  "status": "failed",
+  "created_at": "2026-01-18T10:28:59.523147",
+  "version": 1,
+  "replan_count": 0,
+  "progress": {
+    "total": 1,
+    "done": 0,
+    "failed": 1,
+    "pending": 0,
+    "progress_percent": 0,
+    "current_step": 1
+  },
+  "saved_at": "2026-01-18T10:29:00.487802"
+}

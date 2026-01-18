@@ -1,0 +1,185 @@
+# 代码 Agent 提示词配置
+
+system_prompt: |
+  你是一个专业的 Python 量化编程助手。你的任务是帮助用户编写、修改和调试量化交易相关的代码。
+
+  ## 你的能力
+  1. **代码生成**: 根据用户需求生成 Python 代码
+  2. **代码修改**: 修改现有代码，添加功能或修复bug
+  3. **代码解释**: 解释代码的功能和逻辑
+  4. **调试帮助**: 分析错误信息，提供解决方案
+
+  ## 输出格式
+  当你需要创建或修改文件时，请使用以下格式：
+
+  ```python:文件路径
+  代码内容
+  ```
+
+  例如：
+  ```python:strategy/rsi.py
+  import pandas as pd
+
+  def calculate_rsi(prices, period=14):
+      # RSI 计算逻辑
+      pass
+  ```
+
+  ## 代码规范
+  1. 使用 type hints 提高代码可读性
+  2. 函数和类需要有 docstring
+  3. 适当的注释说明复杂逻辑
+  4. 遵循 PEP8 代码风格
+  5. 优先使用 pandas/numpy 向量化操作提升性能
+
+  ## 量化编程建议
+  1. 数据处理使用 pandas DataFrame
+  2. 技术指标计算优先使用向量化操作
+  3. 回测逻辑要考虑滑点、手续费
+  4. 信号生成要清晰明确
+  5. 风险控制要有止损止盈逻辑
+
+  ## 安全注意事项
+  1. 不要生成可能造成安全风险的代码
+  2. 不要访问用户工作区以外的文件
+  3. 网络请求只用于获取行情数据
+
+greeting: |
+  👋 你好！我是量化代码助手。
+
+  我可以帮你：
+  - 📝 编写量化策略代码
+  - 🔧 修改和优化现有代码
+  - 🐛 调试和解决问题
+  - 📊 分析和解释代码
+
+  请描述你想要实现的功能，比如：
+  - "帮我写一个 RSI 策略"
+  - "修改 main.py，添加移动平均线计算"
+  - "解释这段代码的作用"
+
+code_templates:
+  rsi_strategy: |
+    """
+    RSI 策略模板
+    """
+    import pandas as pd
+    import numpy as np
+    from typing import Tuple
+
+
+    def calculate_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
+        """
+        计算 RSI 指标
+        
+        Args:
+            prices: 价格序列
+            period: RSI 周期，默认14
+            
+        Returns:
+            RSI 值序列
+        """
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+
+
+    def generate_signals(prices: pd.Series, 
+                         oversold: float = 30, 
+                         overbought: float = 70) -> pd.Series:
+        """
+        生成交易信号
+        
+        Args:
+            prices: 价格序列
+            oversold: 超卖阈值
+            overbought: 超买阈值
+            
+        Returns:
+            信号序列: 1=买入, -1=卖出, 0=持有
+        """
+        rsi = calculate_rsi(prices)
+        
+        signals = pd.Series(0, index=prices.index)
+        signals[rsi < oversold] = 1   # 买入信号
+        signals[rsi > overbought] = -1  # 卖出信号
+        
+        return signals
+
+
+    if __name__ == "__main__":
+        # 示例用法
+        import numpy as np
+        
+        # 生成模拟数据
+        np.random.seed(42)
+        prices = pd.Series(100 + np.cumsum(np.random.randn(100)))
+        
+        # 计算 RSI
+        rsi = calculate_rsi(prices)
+        print(f"最新 RSI: {rsi.iloc[-1]:.2f}")
+        
+        # 生成信号
+        signals = generate_signals(prices)
+        print(f"最新信号: {signals.iloc[-1]}")
+
+  ma_crossover: |
+    """
+    均线交叉策略模板
+    """
+    import pandas as pd
+    import numpy as np
+    from typing import Tuple
+
+
+    def calculate_ma(prices: pd.Series, period: int) -> pd.Series:
+        """计算移动平均线"""
+        return prices.rolling(window=period).mean()
+
+
+    def ma_crossover_signals(prices: pd.Series,
+                             fast_period: int = 10,
+                             slow_period: int = 30) -> pd.Series:
+        """
+        均线交叉信号
+        
+        Args:
+            prices: 价格序列
+            fast_period: 快线周期
+            slow_period: 慢线周期
+            
+        Returns:
+            信号序列: 1=金叉买入, -1=死叉卖出, 0=持有
+        """
+        fast_ma = calculate_ma(prices, fast_period)
+        slow_ma = calculate_ma(prices, slow_period)
+        
+        signals = pd.Series(0, index=prices.index)
+        
+        # 金叉：快线上穿慢线
+        golden_cross = (fast_ma > slow_ma) & (fast_ma.shift(1) <= slow_ma.shift(1))
+        # 死叉：快线下穿慢线
+        death_cross = (fast_ma < slow_ma) & (fast_ma.shift(1) >= slow_ma.shift(1))
+        
+        signals[golden_cross] = 1
+        signals[death_cross] = -1
+        
+        return signals
+
+
+    if __name__ == "__main__":
+        # 示例用法
+        np.random.seed(42)
+        prices = pd.Series(100 + np.cumsum(np.random.randn(100)))
+        
+        signals = ma_crossover_signals(prices)
+        buy_count = (signals == 1).sum()
+        sell_count = (signals == -1).sum()
+        
+        print(f"买入信号数: {buy_count}")
+        print(f"卖出信号数: {sell_count}")
+
