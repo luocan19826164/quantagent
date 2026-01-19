@@ -1,0 +1,126 @@
+{
+  "id": "25fd5d6d",
+  "task": "我想实现一个回测的代码，btc币种最近一年，当rsi（14）< 20就买入，买入后>60就卖出",
+  "steps": [
+    {
+      "id": 1,
+      "description": "分析现有项目结构，查看main.py内容，了解项目框架和依赖",
+      "status": "done",
+      "expected_outcome": "明确项目当前状态，确定需要添加的模块和功能",
+      "tools_needed": [
+        "read_file",
+        "list_directory"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "result": null,
+      "error": null,
+      "files_changed": []
+    },
+    {
+      "id": 2,
+      "description": "获取比特币最近一年的历史价格数据（日线或小时线），建议使用yfinance或ccxt库",
+      "status": "done",
+      "expected_outcome": "获得包含时间戳、开盘价、最高价、最低价、收盘价、成交量的DataFrame",
+      "tools_needed": [
+        "write_file",
+        "shell_exec"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "result": null,
+      "error": null,
+      "files_changed": []
+    },
+    {
+      "id": 3,
+      "description": "实现RSI(14)指标计算函数，计算每日RSI值",
+      "status": "done",
+      "expected_outcome": "数据中新增RSI(14)列，包含每日RSI值",
+      "tools_needed": [
+        "write_file",
+        "patch_file"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "result": null,
+      "error": null,
+      "files_changed": []
+    },
+    {
+      "id": 4,
+      "description": "实现回测引擎：遍历数据，当RSI<20且未持仓时买入，买入后RSI>60时卖出，记录每次交易",
+      "status": "done",
+      "expected_outcome": "生成交易记录列表，包含买卖时间、价格、数量、收益等信息",
+      "tools_needed": [
+        "write_file",
+        "patch_file"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "result": null,
+      "error": null,
+      "files_changed": []
+    },
+    {
+      "id": 5,
+      "description": "计算回测性能指标：总收益率、年化收益率、夏普比率、最大回撤、胜率等",
+      "status": "done",
+      "expected_outcome": "输出详细的回测报告，包括关键指标和交易统计",
+      "tools_needed": [
+        "write_file",
+        "patch_file"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "result": null,
+      "error": null,
+      "files_changed": [
+        "performance_metrics.py"
+      ]
+    },
+    {
+      "id": 6,
+      "description": "可视化回测结果：绘制资产曲线、RSI指标图、买卖点标记",
+      "status": "pending",
+      "expected_outcome": "生成清晰的图表展示策略表现",
+      "tools_needed": [
+        "write_file",
+        "shell_exec"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "result": null,
+      "error": null,
+      "files_changed": []
+    },
+    {
+      "id": 7,
+      "description": "运行完整的回测，验证代码正确性，检查边界情况（如数据末尾的持仓处理）",
+      "status": "pending",
+      "expected_outcome": "回测成功运行，输出合理的结果，无运行时错误",
+      "tools_needed": [
+        "shell_exec"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "result": null,
+      "error": null,
+      "files_changed": []
+    }
+  ],
+  "current_step_id": 1,
+  "status": "awaiting_approval",
+  "created_at": "2026-01-19T08:54:34.150969",
+  "version": 1,
+  "replan_count": 0,
+  "progress": {
+    "total": 7,
+    "done": 5,
+    "failed": 0,
+    "pending": 2,
+    "progress_percent": 71,
+    "current_step": 1
+  },
+  "saved_at": "2026-01-19T08:54:34.151017"
+}

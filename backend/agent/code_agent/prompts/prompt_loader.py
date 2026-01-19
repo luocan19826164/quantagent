@@ -1,0 +1,97 @@
+"""
+Code Agent Prompt 配置加载器
+从 YAML 文件加载 prompt 配置，实现代码和 prompt 的分离
+"""
+
+import os
+import yaml
+from typing import Dict, Any, Optional
+
+
+class CodeAgentPromptLoader:
+    """Code Agent Prompt 加载器"""
+    
+    def __init__(self, config_path: str = None):
+        """
+        初始化加载器
+        
+        Args:
+            config_path: 配置文件路径，默认为当前目录下的 code_agent_prompt.yaml
+        """
+        if config_path is None:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            config_path = os.path.join(current_dir, "code_agent_prompt.yaml")
+        
+        self.config_path = config_path
+        self.config = self._load_config()
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """加载 YAML 配置文件"""
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                return yaml.safe_load(f)
+        except Exception as e:
+            raise RuntimeError(f"无法加载 prompt 配置文件 {self.config_path}: {e}")
+    
+    def get_step_execution_prompt(self) -> str:
+        """
+        获取步骤执行的系统提示词
+        
+        Returns:
+            步骤执行系统提示词
+        """
+        return self.config.get('step_execution_prompt', '')
+    
+    def get_system_prompt(self) -> str:
+        """
+        获取通用系统提示词
+        
+        Returns:
+            通用系统提示词
+        """
+        return self.config.get('system_prompt', '')
+    
+    def get_greeting(self) -> str:
+        """
+        获取问候语
+        
+        Returns:
+            问候语
+        """
+        return self.config.get('greeting', '')
+    
+    def get_code_template(self, template_name: str) -> Optional[str]:
+        """
+        获取代码模板
+        
+        Args:
+            template_name: 模板名称，如 'rsi_strategy', 'ma_crossover'
+            
+        Returns:
+            代码模板内容，不存在则返回 None
+        """
+        templates = self.config.get('code_templates', {})
+        return templates.get(template_name)
+    
+    def get_all_template_names(self) -> list:
+        """
+        获取所有可用的模板名称
+        
+        Returns:
+            模板名称列表
+        """
+        templates = self.config.get('code_templates', {})
+        return list(templates.keys())
+
+
+# 单例模式，避免重复加载配置文件
+_prompt_loader_instance = None
+
+
+def get_code_agent_prompt_loader() -> CodeAgentPromptLoader:
+    """获取 CodeAgentPromptLoader 单例"""
+    global _prompt_loader_instance
+    if _prompt_loader_instance is None:
+        _prompt_loader_instance = CodeAgentPromptLoader()
+    return _prompt_loader_instance
+

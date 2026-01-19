@@ -16,6 +16,9 @@ class FileInfo:
     content: str = ""
     language: str = "python"
     cursor: Optional[Dict[str, int]] = None  # {"line": 0, "column": 0}
+    is_editing: bool = False  # 是否正在编辑（正在编辑的文件保留完整内容）
+    original_length: int = 0  # 原始内容长度（用于检测是否被截断）
+    is_truncated: bool = False  # 是否被截断
     
 
 @dataclass
@@ -35,26 +38,100 @@ class CodeContext:
     focused_files: List[FileInfo] = field(default_factory=list)  # 活跃文件列表
     symbol_index: Optional[SymbolIndex] = None
     max_files: int = 10  # 最多保留的活跃文件数
-    max_content_per_file: int = 5000  # 每个文件最大字符数
+    max_content_per_file: int = 10000  # 每个文件最大字符数（从 5000 提升到 10000）
+    max_editing_files: int = 3  # 正在编辑的文件数量限制（这些文件保留完整内容）
     
-    def add_file(self, path: str, content: str, language: str = "python"):
-        """添加或更新活跃文件"""
+    def add_file(self, path: str, content: str, language: str = "python", is_editing: bool = False):
+        """
+        添加或更新活跃文件
+        
+        Args:
+            path: 文件路径
+            content: 文件内容
+            language: 编程语言
+            is_editing: 是否正在编辑（正在编辑的文件保留完整内容，不截断）
+        """
+        original_length = len(content)
+        
+        # 决定是否截断
+        if is_editing:
+            # 正在编辑的文件保留完整内容
+            truncated_content = content
+            is_truncated = False
+        elif original_length > self.max_content_per_file:
+            # 超过限制，截断并添加提示
+            truncated_content = content[:self.max_content_per_file]
+            truncated_content += f"\n\n# ... [内容已截断，原始长度: {original_length} 字符，显示前 {self.max_content_per_file} 字符]"
+            truncated_content += f"\n# 如需查看完整内容，请使用 read_file 工具"
+            is_truncated = True
+        else:
+            truncated_content = content
+            is_truncated = False
+        
         # 检查是否已存在
         for f in self.focused_files:
             if f.path == path:
-                f.content = content[:self.max_content_per_file]
+                f.content = truncated_content
+                f.is_editing = is_editing
+                f.original_length = original_length
+                f.is_truncated = is_truncated
+                # 如果标记为编辑，将其移到列表末尾（最近使用）
+                if is_editing:
+                    self.focused_files.remove(f)
+                    self.focused_files.append(f)
                 return
         
         # 添加新文件
         self.focused_files.append(FileInfo(
             path=path,
-            content=content[:self.max_content_per_file],
-            language=language
+            content=truncated_content,
+            language=language,
+            is_editing=is_editing,
+            original_length=original_length,
+            is_truncated=is_truncated
         ))
         
-        # 保持文件数在限制内（移除最早的）
-        while len(self.focused_files) > self.max_files:
-            self.focused_files.pop(0)
+        # 保持文件数在限制内
+        self._enforce_file_limits()
+    
+    def mark_as_editing(self, path: str):
+        """标记文件为正在编辑状态"""
+        for f in self.focused_files:
+            if f.path == path:
+                f.is_editing = True
+                # 移到列表末尾
+                self.focused_files.remove(f)
+                self.focused_files.append(f)
+                return
+    
+    def _enforce_file_limits(self):
+        """
+        强制执行文件数量限制
+        优先移除非编辑中的旧文件
+        """
+        # 分离编辑中和非编辑中的文件
+        editing_files = [f for f in self.focused_files if f.is_editing]
+        non_editing_files = [f for f in self.focused_files if not f.is_editing]
+        
+        # 如果编辑中的文件超过限制，移除最早的编辑文件
+        while len(editing_files) > self.max_editing_files:
+            removed = editing_files.pop(0)
+            removed.is_editing = False  # 降级为普通文件
+            non_editing_files.insert(0, removed)
+        
+        # 如果总文件数超过限制，优先移除非编辑文件
+        total_files = len(editing_files) + len(non_editing_files)
+        while total_files > self.max_files and non_editing_files:
+            non_editing_files.pop(0)
+            total_files -= 1
+        
+        # 如果还超过限制（不太可能），移除编辑文件
+        while total_files > self.max_files and editing_files:
+            editing_files.pop(0)
+            total_files -= 1
+        
+        # 重建列表：非编辑文件在前，编辑文件在后
+        self.focused_files = non_editing_files + editing_files
     
     def get_file(self, path: str) -> Optional[FileInfo]:
         """获取活跃文件"""
@@ -87,16 +164,35 @@ class CodeContext:
         }
     
     def to_context_string(self) -> str:
-        """转换为 LLM 可读的上下文字符串"""
+        """转换为 LLM 可读的上下文字符串（仅文件内容，警告在 agent.py 中统一处理）"""
         if not self.focused_files:
             return ""
         
-        parts = ["## 活跃文件内容（已读取/修改的文件）"]
+        parts = ["## 活跃文件内容"]
+        
         for f in self.focused_files:
-            parts.append(f"\n### {f.path}")
+            # 构建文件标题，包含状态信息
+            status_tags = []
+            if f.is_editing:
+                status_tags.append("📝编辑中")
+            if f.is_truncated:
+                status_tags.append(f"⚠️已截断({f.original_length}→{len(f.content)}字符)")
+            
+            status_str = f" [{', '.join(status_tags)}]" if status_tags else ""
+            parts.append(f"\n### {f.path}{status_str}")
             parts.append(f"```{f.language}\n{f.content}\n```")
         
         return "\n".join(parts)
+    
+    def get_context_summary(self) -> str:
+        """获取上下文摘要（用于日志）"""
+        editing_count = sum(1 for f in self.focused_files if f.is_editing)
+        truncated_count = sum(1 for f in self.focused_files if f.is_truncated)
+        return f"{len(self.focused_files)} files ({editing_count} editing, {truncated_count} truncated)"
+    
+    def get_active_file_paths(self) -> List[str]:
+        """获取活跃文件路径列表"""
+        return [f.path for f in self.focused_files]
 
 
 @dataclass

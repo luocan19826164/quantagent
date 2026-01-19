@@ -1,0 +1,6 @@
+{
+  "plan_id": "25fd5d6d",
+  "task": "我想实现一个回测的代码，btc币种最近一年，当rsi（14）< 20就买入，买入后>60就卖出",
+  "status": "awaiting_approval",
+  "updated_at": "2026-01-19T08:54:34.151732"
+}

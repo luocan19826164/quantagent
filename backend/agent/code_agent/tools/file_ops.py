@@ -224,7 +224,12 @@ class PatchFileTool(BaseTool):
             return ToolResult(
                 success=True,
                 output=output,
-                data={"path": path, "patches_applied": len(applied), "errors": errors}
+                data={
+                    "path": path, 
+                    "patches_applied": len(applied), 
+                    "errors": errors,
+                    "new_content": content  # 返回更新后的完整内容，用于更新上下文
+                }
             )
             
         except Exception as e:

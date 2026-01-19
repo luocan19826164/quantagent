@@ -18,35 +18,8 @@ from .plan import Plan, PlanStep, PlanStatus, StepStatus, StepResult, PlanTracke
 from .tools import create_tool_registry, ToolRegistry, FunctionCallHandler
 from .workspace_manager import WorkspaceManager
 from .context import CodeContext
+from .prompts.prompt_loader import get_code_agent_prompt_loader
 from utils.llm_config import resolve_llm_config
-
-
-# 步骤执行的系统提示词
-STEP_EXECUTION_PROMPT = """你是一个专业的 Python 量化编程助手。你正在按照计划执行任务。
-
-## 你的能力
-1. 读取和理解代码
-2. 创建和修改文件
-3. 执行 shell 命令
-4. 搜索代码
-
-## 输出要求
-1. 使用提供的工具完成当前步骤
-2. 每次只执行一个步骤的内容
-3. 完成后简要说明执行结果
-4. 如果遇到问题，说明原因
-
-## 重要约束
-1. 所有文件操作必须通过工具（write_file、patch_file）完成
-2. 不要在回复中直接输出代码块让用户复制，而是直接调用工具写入
-3. 只处理当前步骤的任务，不要跨步骤操作
-
-## 代码规范
-1. 使用 type hints
-2. 添加必要的 docstring
-3. 考虑错误处理
-4. 量化代码优先使用 pandas/numpy 向量化操作
-"""
 
 
 class PlanExecuteAgent:
@@ -188,30 +161,30 @@ class PlanExecuteAgent:
         
         try:
             if tool_name == "read_file":
-                # 读取文件后添加到活跃文件
+                # 读取文件后添加到活跃文件（非编辑状态，可截断）
                 path = tool_args.get("path", "")
                 content = result.data.get("content", "") if result.data else ""
-                self.code_context.add_file(path, content)
+                self.code_context.add_file(path, content, is_editing=False)
                 logging.info(f"Code context: Added file '{path}' ({len(content)} chars)")
                 
             elif tool_name == "write_file":
-                # 写入文件后更新活跃文件
+                # 写入文件后更新活跃文件（标记为编辑状态，保留完整内容）
                 path = tool_args.get("path", "")
                 content = tool_args.get("content", "")
-                self.code_context.add_file(path, content)
+                self.code_context.add_file(path, content, is_editing=True)
                 # 更新文件树
                 if path not in self.code_context.file_tree:
                     self.code_context.file_tree.append(path)
                     self.code_context.file_tree.sort()
-                logging.info(f"Code context: Updated file '{path}'")
+                logging.info(f"Code context: Updated file '{path}' (editing)")
                 
             elif tool_name == "patch_file":
-                # patch 后需要重新读取完整内容
+                # patch 后更新活跃文件（标记为编辑状态，保留完整内容）
                 path = tool_args.get("path", "")
                 new_content = result.data.get("new_content", "") if result.data else ""
                 if new_content:
-                    self.code_context.add_file(path, new_content)
-                    logging.info(f"Code context: Patched file '{path}'")
+                    self.code_context.add_file(path, new_content, is_editing=True)
+                    logging.info(f"Code context: Patched file '{path}' (editing)")
                     
             elif tool_name == "delete_file":
                 # 删除文件后从上下文移除
@@ -291,6 +264,10 @@ class PlanExecuteAgent:
         """
         # 解析超时
         timeout_seconds = self._parse_timeout(timeout)
+        logging.info(f"[execute_file] Starting: {file_path}, timeout: {timeout_seconds}s")
+        
+        # 先发送开始事件
+        yield {"type": "started", "file": file_path}
         
         # 使用 shell_exec 工具执行
         result = self.tool_registry.execute(
@@ -299,24 +276,37 @@ class PlanExecuteAgent:
             timeout=timeout_seconds
         )
         
-        yield {"type": "started", "file": file_path}
+        # 打印调试信息
+        logging.info(f"[execute_file] Result: success={result.success}, error={result.error}")
+        if result.data:
+            logging.info(f"[execute_file] Data keys: {list(result.data.keys())}")
+            stdout = result.data.get("stdout", "")
+            stderr = result.data.get("stderr", "")
+            logging.info(f"[execute_file] stdout length: {len(stdout)}, stderr length: {len(stderr)}")
+            if stdout:
+                logging.info(f"[execute_file] stdout preview: {stdout[:200]}...")
         
         if result.success:
             if result.data and result.data.get("stdout"):
-                yield {"type": "stdout", "data": result.data["stdout"]}
+                # 前端期望 content 字段
+                yield {"type": "stdout", "content": result.data["stdout"]}
             if result.data and result.data.get("stderr"):
-                yield {"type": "stderr", "data": result.data["stderr"]}
+                yield {"type": "stderr", "content": result.data["stderr"]}
+            # 前端期望 exit 事件
+            exit_code = result.data.get("exit_code", 0) if result.data else 0
+            logging.info(f"[execute_file] Completed: exit_code={exit_code}")
             yield {
-                "type": "completed",
-                "exit_code": result.data.get("exit_code", 0) if result.data else 0,
-                "success": True
+                "type": "exit",
+                "exit_code": exit_code,
+                "duration": result.data.get("duration", 0) if result.data else 0
             }
         else:
-            yield {"type": "stderr", "data": result.error or "Execution failed"}
+            logging.info(f"[execute_file] Failed: {result.error}")
+            yield {"type": "stderr", "content": result.error or "Execution failed"}
             yield {
-                "type": "completed",
+                "type": "exit",
                 "exit_code": result.data.get("exit_code", 1) if result.data else 1,
-                "success": False
+                "duration": result.data.get("duration", 0) if result.data else 0
             }
     
     def stop_execution(self) -> bool:
@@ -747,8 +737,12 @@ class PlanExecuteAgent:
     
     def _build_step_messages(self, step: PlanStep, plan: Plan) -> List:
         """构建步骤执行消息"""
+        # 从配置加载系统提示词
+        prompt_loader = get_code_agent_prompt_loader()
+        step_execution_prompt = prompt_loader.get_step_execution_prompt()
+        
         # 系统消息
-        system_content = STEP_EXECUTION_PROMPT + f"""
+        system_content = step_execution_prompt + f"""
 
 ## 项目信息
 - 项目名称: {self.project_name}
@@ -764,7 +758,19 @@ class PlanExecuteAgent:
         # 步骤提示
         step_prompt = self.tracker.get_step_prompt(step)
         
-        # 添加代码上下文
+        # 添加活跃文件警告（放在步骤提示之后、代码内容之前）
+        if self.code_context.focused_files:
+            active_files = [f.path for f in self.code_context.focused_files]
+            step_prompt += f"""
+
+## ⚠️ 活跃文件约束（重要！）
+以下 {len(active_files)} 个文件内容已加载到下方上下文中，**不要再调用 read_file 读取它们**：
+{chr(10).join(f'- {path}' for path in active_files)}
+
+只有当文件不在此列表中时，才需要调用 read_file。
+"""
+        
+        # 添加代码上下文（文件内容）
         code_context = self._get_relevant_context(step)
         if code_context:
             step_prompt += f"\n\n## 相关代码上下文\n{code_context}"
