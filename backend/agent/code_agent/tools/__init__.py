@@ -33,6 +33,7 @@ from .version import (
     RestoreVersionTool,
     GetVersionContentTool
 )
+from .plan_tool import CreatePlanTool, CREATE_PLAN_TOOL_NAME
 
 # RAG 搜索工具（可选导入）
 try:
@@ -65,6 +66,9 @@ def create_tool_registry(workspace_path: str, strict_shell: bool = False,
         配置好的 ToolRegistry
     """
     registry = ToolRegistry()
+    
+    # 计划工具（让 LLM 自主决定是否需要 Plan）
+    registry.register(CreatePlanTool())
     
     # 文件操作
     registry.register(ReadFileTool(workspace_path))
@@ -112,6 +116,10 @@ __all__ = [
     'ToolDefinition',
     'ToolRegistry',
     'FunctionCallHandler',
+    
+    # Plan tool (让 LLM 自主决定模式)
+    'CreatePlanTool',
+    'CREATE_PLAN_TOOL_NAME',
     
     # File operations
     'ReadFileTool',

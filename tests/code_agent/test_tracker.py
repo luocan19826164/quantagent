@@ -88,10 +88,10 @@ class TestPlanTracker:
         """测试检测跳步异常"""
         tracker_with_plan.start_step(1)
         
-        # 模拟 LLM 响应中提到了步骤 3 的关键词 "添加测试用例"
-        # 注意：关键词提取会匹配中文词语，需要完整匹配
+        # 模拟 LLM 响应中明确提出要跳到步骤 3
+        # 使用 tracker._detect_skip_ahead 中定义的触发词
         anomaly = tracker_with_plan.detect_anomaly(
-            "我将开始添加测试用例来验证功能",  # 步骤3的描述是"添加测试用例"
+            "我现在要执行 Step 3: 添加测试用例",
             []
         )
         
@@ -129,28 +129,29 @@ class TestPlanTracker:
         # 不应该检测到异常
         assert anomaly is None
     
-    def test_get_step_prompt(self, tracker_with_plan):
-        """测试生成步骤提示"""
-        tracker_with_plan.start_step(1)
-        
-        step = tracker_with_plan.current_plan.steps[0]
-        prompt = tracker_with_plan.get_step_prompt(step)
-        
-        assert "创建文件结构" in prompt
-        assert "Step 1" in prompt
-        assert "实现 RSI 计算" in prompt  # 任务名
-    
     def test_get_correction_prompt(self, tracker_with_plan):
         """测试生成修正提示"""
-        tracker_with_plan.start_step(1)
+        from unittest.mock import patch
+        # 导入模块以重置全局单例
+        from agent.code_agent.prompts import prompt_loader
         
+        tracker_with_plan.start_step(1)
         anomaly = "跳步警告: 检测到提前执行步骤3"
         
-        correction = tracker_with_plan.get_correction_prompt(anomaly)
+        # 重置单例，强制重新加载配置
+        prompt_loader._prompt_loader_instance = None
         
-        assert len(correction) > 0
-        assert "跳步" in correction or "偏离" in correction
-        assert "创建文件结构" in correction
+        # mock prompt loader
+        with patch('agent.code_agent.prompts.prompt_loader.CodeAgentPromptLoader._load_config') as mock_load:
+            # 这里的返回值会作为 loader.config
+            mock_load.return_value = {
+                "correction_prompt": "Anomaly: {anomaly}, Step: {step_id}"
+            }
+            
+            correction = tracker_with_plan.get_correction_prompt(anomaly)
+            
+            assert "Anomaly: 跳步警告" in correction
+            assert "Step: 1" in correction
     
     def test_progress_summary(self, tracker_with_plan):
         """测试进度摘要"""

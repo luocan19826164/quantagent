@@ -27,7 +27,6 @@ class StepStatus(str, Enum):
 class PlanStatus(str, Enum):
     """计划状态"""
     PLANNING = "planning"
-    AWAITING_APPROVAL = "awaiting_approval"
     EXECUTING = "executing"
     COMPLETED = "completed"
     FAILED = "failed"

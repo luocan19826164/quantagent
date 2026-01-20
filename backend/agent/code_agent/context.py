@@ -19,15 +19,175 @@ class FileInfo:
     is_editing: bool = False  # 是否正在编辑（正在编辑的文件保留完整内容）
     original_length: int = 0  # 原始内容长度（用于检测是否被截断）
     is_truncated: bool = False  # 是否被截断
+
+
+# ==================== Repo Map / Symbol Index ====================
+
+@dataclass
+class SymbolInfo:
+    """符号详细信息
     
+    存储单个符号（类、函数、变量等）的详细信息，
+    包括位置、签名、文档字符串等。
+    """
+    name: str
+    symbol_type: Literal["class", "function", "method", "variable", "import", "constant"]
+    file_path: str
+    line_start: int
+    line_end: int = 0
+    signature: str = ""  # 函数/方法签名，如 "def foo(a: int, b: str) -> bool"
+    docstring: str = ""  # 文档字符串（截取前 200 字符）
+    parent: Optional[str] = None  # 父类/父函数名（用于方法）
+    decorators: List[str] = field(default_factory=list)  # 装饰器列表
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "type": self.symbol_type,
+            "file": self.file_path,
+            "line": self.line_start,
+            "signature": self.signature,
+            "docstring": self.docstring[:200] if self.docstring else "",
+            "parent": self.parent,
+        }
+
+
+@dataclass
+class FileSymbols:
+    """单个文件的符号信息"""
+    path: str
+    language: str = "python"
+    symbols: List[SymbolInfo] = field(default_factory=list)
+    imports: List[str] = field(default_factory=list)  # 导入的模块/符号
+    exports: List[str] = field(default_factory=list)  # 导出的符号（__all__）
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "path": self.path,
+            "language": self.language,
+            "symbols": [s.to_dict() for s in self.symbols],
+            "imports": self.imports,
+            "exports": self.exports,
+        }
+
 
 @dataclass
 class SymbolIndex:
-    """代码符号索引"""
+    """代码符号索引（Repo Map）
+    
+    提供项目代码结构的全局视图，帮助 LLM 理解代码库：
+    - 文件级别的符号映射
+    - 符号间的依赖关系
+    - 快速符号查找
+    
+    与 Aider 的 Repo Map 类似，但更轻量。
+    """
+    # 原有简单字段（兼容）
     classes: List[str] = field(default_factory=list)
     functions: List[str] = field(default_factory=list)
     imports: List[str] = field(default_factory=list)
     variables: List[str] = field(default_factory=list)
+    
+    # 新增：详细文件符号映射
+    file_symbols: Dict[str, FileSymbols] = field(default_factory=dict)  # path -> FileSymbols
+    
+    # 新增：符号到文件的反向索引（快速查找）
+    symbol_to_files: Dict[str, List[str]] = field(default_factory=dict)  # symbol_name -> [file_paths]
+    
+    # 新增：文件依赖关系
+    dependencies: Dict[str, List[str]] = field(default_factory=dict)  # file -> [imported_files]
+    
+    def add_file_symbols(self, file_symbols: FileSymbols) -> None:
+        """添加文件的符号信息"""
+        self.file_symbols[file_symbols.path] = file_symbols
+        
+        # 更新简单字段（兼容）
+        for symbol in file_symbols.symbols:
+            if symbol.symbol_type == "class" and symbol.name not in self.classes:
+                self.classes.append(symbol.name)
+            elif symbol.symbol_type in ("function", "method") and symbol.name not in self.functions:
+                self.functions.append(symbol.name)
+            elif symbol.symbol_type == "variable" and symbol.name not in self.variables:
+                self.variables.append(symbol.name)
+            
+            # 更新反向索引
+            if symbol.name not in self.symbol_to_files:
+                self.symbol_to_files[symbol.name] = []
+            if file_symbols.path not in self.symbol_to_files[symbol.name]:
+                self.symbol_to_files[symbol.name].append(file_symbols.path)
+        
+        # 更新导入列表
+        for imp in file_symbols.imports:
+            if imp not in self.imports:
+                self.imports.append(imp)
+    
+    def find_symbol(self, name: str) -> List[SymbolInfo]:
+        """根据名称查找符号"""
+        results = []
+        files = self.symbol_to_files.get(name, [])
+        for file_path in files:
+            file_sym = self.file_symbols.get(file_path)
+            if file_sym:
+                for symbol in file_sym.symbols:
+                    if symbol.name == name:
+                        results.append(symbol)
+        return results
+    
+    def get_file_summary(self, path: str) -> Optional[Dict[str, Any]]:
+        """获取文件的符号摘要"""
+        file_sym = self.file_symbols.get(path)
+        if not file_sym:
+            return None
+        return file_sym.to_dict()
+    
+    def to_repo_map_string(self, max_files: int = 20) -> str:
+        """生成 Repo Map 字符串（用于发送给 LLM）
+        
+        格式类似于 Aider 的 repo map：
+        ```
+        src/utils.py:
+          - class Config
+          - def load_config(path: str) -> Config
+          - def save_config(config: Config, path: str)
+        
+        src/main.py:
+          - def main()
+          - class Application
+        ```
+        """
+        lines = []
+        for i, (path, file_sym) in enumerate(self.file_symbols.items()):
+            if i >= max_files:
+                lines.append(f"... 还有 {len(self.file_symbols) - max_files} 个文件")
+                break
+            
+            lines.append(f"{path}:")
+            for symbol in file_sym.symbols[:10]:  # 每个文件最多显示 10 个符号
+                if symbol.signature:
+                    lines.append(f"  - {symbol.signature}")
+                else:
+                    lines.append(f"  - {symbol.symbol_type} {symbol.name}")
+            
+            if len(file_sym.symbols) > 10:
+                lines.append(f"  ... 还有 {len(file_sym.symbols) - 10} 个符号")
+            lines.append("")
+        
+        return "\n".join(lines)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "classes": self.classes,
+            "functions": self.functions,
+            "imports": self.imports,
+            "variables": self.variables,
+            "file_count": len(self.file_symbols),
+            "total_symbols": sum(len(fs.symbols) for fs in self.file_symbols.values()),
+            "files": {
+                path: fs.to_dict() 
+                for path, fs in list(self.file_symbols.items())[:10]  # 只返回前 10 个文件
+            }
+        }
 
 
 @dataclass
@@ -168,7 +328,7 @@ class CodeContext:
         if not self.focused_files:
             return ""
         
-        parts = ["## 活跃文件内容"]
+        parts = []
         
         for f in self.focused_files:
             # 构建文件标题，包含状态信息
@@ -254,18 +414,235 @@ class Decision:
     reason: str
 
 
+# ==================== 对话历史（新增）====================
+
+@dataclass
+class Message:
+    """对话消息
+    
+    用于记录 user/assistant/tool 之间的消息。
+    
+    去重策略：
+    - read_file/write_file 的工具结果在历史中缩略（完整内容在 focused_files）
+    - 其他工具结果保留完整
+    """
+    role: Literal["user", "assistant", "tool"]
+    content: str
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    
+    # assistant 消息可能有工具调用
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    
+    # tool 消息需要关联的 tool_call_id
+    tool_call_id: Optional[str] = None
+    tool_name: Optional[str] = None
+    
+    # 去重标记
+    is_abbreviated: bool = False  # 是否为缩略内容
+    full_content_ref: Optional[str] = None  # 完整内容的引用位置
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "role": self.role,
+            "content": self.content,
+            "timestamp": self.timestamp,
+            "tool_calls": self.tool_calls,
+            "tool_call_id": self.tool_call_id,
+            "tool_name": self.tool_name,
+            "is_abbreviated": self.is_abbreviated,
+        }
+
+
+@dataclass
+class ConversationHistory:
+    """对话历史管理
+    
+    负责管理当前会话的消息历史，支持：
+    - 添加 user/assistant/tool 消息
+    - 工具结果去重（与 focused_files 配合）
+    - 淘汰旧消息
+    
+    与 MemoryContext 的区别：
+    - ConversationHistory: 短期记忆，当前会话的完整消息
+    - MemoryContext: 长期记忆，跨会话的决策摘要
+    """
+    messages: List[Message] = field(default_factory=list)
+    max_messages: int = 50  # 最多保留的消息数
+    max_tool_result_chars: int = 2000  # 非文件操作的工具结果最大字符数
+    
+    def add_user_message(self, content: str):
+        """添加用户消息"""
+        self.messages.append(Message(
+            role="user",
+            content=content
+        ))
+        self._enforce_limits()
+    
+    def add_assistant_message(self, content: str, tool_calls: List[Dict] = None):
+        """添加 assistant 消息"""
+        self.messages.append(Message(
+            role="assistant",
+            content=content,
+            tool_calls=tool_calls
+        ))
+        self._enforce_limits()
+    
+    def add_tool_result(self, tool_call_id: str, tool_name: str, result: str, 
+                        file_path: str = None):
+        """添加工具结果（支持去重）
+        
+        去重策略：
+        - read_file: 缩略为引用（完整内容在 focused_files）
+        - write_file: 缩略为确认消息
+        - 其他工具: 截断保留
+        
+        Args:
+            tool_call_id: 工具调用 ID
+            tool_name: 工具名称
+            result: 工具执行结果
+            file_path: 文件路径（用于 read_file/write_file）
+        """
+        if tool_name == "read_file" and file_path:
+            # 文件内容已在 focused_files 中，只保存引用
+            abbreviated = f"[已读取 {file_path}，完整内容见 focused_files]"
+            self.messages.append(Message(
+                role="tool",
+                content=abbreviated,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                is_abbreviated=True,
+                full_content_ref=f"focused_files[{file_path}]"
+            ))
+        elif tool_name == "write_file" and file_path:
+            # 写入操作只保存确认
+            abbreviated = f"[已写入 {file_path}，操作成功]"
+            self.messages.append(Message(
+                role="tool",
+                content=abbreviated,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                is_abbreviated=True
+            ))
+        elif tool_name == "patch_file" and file_path:
+            abbreviated = f"[已修改 {file_path}，操作成功]"
+            self.messages.append(Message(
+                role="tool",
+                content=abbreviated,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                is_abbreviated=True
+            ))
+        else:
+            # 其他工具结果：截断保留
+            if len(result) > self.max_tool_result_chars:
+                truncated = result[:self.max_tool_result_chars] + f"\n... [截断，原始 {len(result)} 字符]"
+            else:
+                truncated = result
+            self.messages.append(Message(
+                role="tool",
+                content=truncated,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name
+            ))
+        
+        self._enforce_limits()
+    
+    def _enforce_limits(self):
+        """淘汰旧消息"""
+        if len(self.messages) > self.max_messages:
+            # 保留最近的消息，但确保第一条 user 消息不会丢失
+            # 简单策略：移除最早的消息
+            excess = len(self.messages) - self.max_messages
+            self.messages = self.messages[excess:]
+    
+    def get_recent_messages(self, n: int = 20) -> List[Message]:
+        """获取最近 n 条消息"""
+        return self.messages[-n:]
+    
+    def clear(self):
+        """清空历史"""
+        self.messages = []
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "messages": [m.to_dict() for m in self.messages],
+            "message_count": len(self.messages)
+        }
+    
+    def to_langchain_messages(self):
+        """转换为 LangChain 消息格式
+        
+        Returns:
+            List[BaseMessage]: LangChain 消息列表
+        """
+        # 延迟导入，避免循环依赖
+        from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+        
+        lc_messages = []
+        for msg in self.messages:
+            if msg.role == "user":
+                lc_messages.append(HumanMessage(content=msg.content))
+            elif msg.role == "assistant":
+                if msg.tool_calls:
+                    lc_messages.append(AIMessage(
+                        content=msg.content,
+                        tool_calls=[{
+                            "id": tc.get("id", ""),
+                            "name": tc.get("name", ""),
+                            "args": tc.get("arguments", tc.get("args", {}))
+                        } for tc in msg.tool_calls]
+                    ))
+                else:
+                    lc_messages.append(AIMessage(content=msg.content))
+            elif msg.role == "tool":
+                lc_messages.append(ToolMessage(
+                    content=msg.content,
+                    tool_call_id=msg.tool_call_id or ""
+                ))
+        
+        return lc_messages
+
+
 @dataclass
 class MemoryContext:
-    """记忆上下文"""
+    """记忆上下文
+    
+    存储长期的、跨会话的决策和项目规范。
+    与 ConversationHistory 的区别：
+    - ConversationHistory: 短期，存储当前会话的完整对话消息
+    - MemoryContext: 长期，存储抽象的决策和经验
+    """
     project_conventions: List[str] = field(default_factory=list)
     recent_decisions: List[Decision] = field(default_factory=list)
+    decisions: List[Decision] = field(default_factory=list)  # 别名，兼容性
+    max_decisions: int = 50  # 最多保留的决策数
+    
+    def add_decision(self, decision: str, reason: str = "") -> None:
+        """添加一条决策记录"""
+        d = Decision(decision=decision, reason=reason)
+        self.recent_decisions.append(d)
+        self.decisions.append(d)
+        # 淘汰旧的
+        if len(self.recent_decisions) > self.max_decisions:
+            self.recent_decisions = self.recent_decisions[-self.max_decisions:]
+        if len(self.decisions) > self.max_decisions:
+            self.decisions = self.decisions[-self.max_decisions:]
+    
+    def add_convention(self, convention: str) -> None:
+        """添加项目规范"""
+        if convention not in self.project_conventions:
+            self.project_conventions.append(convention)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "project_conventions": self.project_conventions,
+            "decisions": [
+                {"decision": d.decision, "reason": d.reason}
+                for d in self.decisions[-10:]  # 只返回最近10条
+            ],
             "recent_decisions": [
                 {"decision": d.decision, "reason": d.reason}
-                for d in self.recent_decisions[-10:]  # 只保留最近10条
+                for d in self.recent_decisions[-10:]  # 只返回最近10条
             ]
         }
 
@@ -343,7 +720,16 @@ class PlanInfo:
 
 @dataclass
 class CodeAgentContext:
-    """代码 Agent 完整上下文"""
+    """代码 Agent 完整上下文
+    
+    包含：
+    - 元信息（session_id, project_id 等）
+    - 任务和计划
+    - 代码上下文（focused_files, file_tree）
+    - 对话历史（短期，当前会话）
+    - 记忆（长期，跨会话的决策摘要）
+    - 执行上下文、环境、安全配置等
+    """
     
     # 元信息
     session_id: str
@@ -360,13 +746,16 @@ class CodeAgentContext:
     # 代码上下文
     code_context: Optional[CodeContext] = None
     
+    # 对话历史（短期：当前会话的完整消息）
+    conversation: Optional[ConversationHistory] = None
+    
     # 执行上下文
     execution_context: Optional[ExecutionContext] = None
     
     # 工具
     tools: List[ToolDef] = field(default_factory=list)
     
-    # 记忆
+    # 记忆（长期：跨会话的决策摘要）
     memory: Optional[MemoryContext] = None
     
     # 环境
@@ -385,6 +774,7 @@ class CodeAgentContext:
             "task": self.task.to_dict() if self.task else None,
             "plan": self.plan.to_dict() if self.plan else None,
             "code_context": self.code_context.to_dict() if self.code_context else None,
+            "conversation": self.conversation.to_dict() if self.conversation else None,
             "execution_context": self.execution_context.to_dict() if self.execution_context else None,
             "tools": [
                 {"name": t.name, "description": t.description}
@@ -428,4 +818,174 @@ DEFAULT_TOOLS = [
         parameters={"query": "string", "file_pattern": "string"}
     ),
 ]
+
+
+# ==================== 符号解析辅助函数 ====================
+
+def parse_python_symbols(file_path: str, content: str) -> FileSymbols:
+    """解析 Python 文件的符号信息
+    
+    使用 Python AST 解析文件，提取类、函数、方法等符号信息。
+    
+    Args:
+        file_path: 文件路径
+        content: 文件内容
+        
+    Returns:
+        FileSymbols 对象
+    """
+    import ast
+    
+    file_symbols = FileSymbols(path=file_path, language="python")
+    
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        # 解析失败，返回空的符号列表
+        return file_symbols
+    
+    def get_docstring(node) -> str:
+        """获取节点的文档字符串"""
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) 
+            and node.body 
+            and isinstance(node.body[0], ast.Expr) 
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)):
+            return node.body[0].value.value
+        return ""
+    
+    def get_function_signature(node) -> str:
+        """获取函数签名"""
+        args = []
+        for arg in node.args.args:
+            arg_str = arg.arg
+            if arg.annotation:
+                arg_str += f": {ast.unparse(arg.annotation)}"
+            args.append(arg_str)
+        
+        sig = f"def {node.name}({', '.join(args)})"
+        if node.returns:
+            sig += f" -> {ast.unparse(node.returns)}"
+        return sig
+    
+    def get_decorators(node) -> List[str]:
+        """获取装饰器列表"""
+        decorators = []
+        for dec in node.decorator_list:
+            try:
+                decorators.append(ast.unparse(dec))
+            except:
+                pass
+        return decorators
+    
+    # 只遍历顶级节点（不递归，避免重复处理）
+    for node in ast.iter_child_nodes(tree):
+        # 顶级类
+        if isinstance(node, ast.ClassDef):
+            symbol = SymbolInfo(
+                name=node.name,
+                symbol_type="class",
+                file_path=file_path,
+                line_start=node.lineno,
+                line_end=node.end_lineno or node.lineno,
+                signature=f"class {node.name}",
+                docstring=get_docstring(node),
+                decorators=get_decorators(node)
+            )
+            file_symbols.symbols.append(symbol)
+            
+            # 类中的方法
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    method = SymbolInfo(
+                        name=item.name,
+                        symbol_type="method",
+                        file_path=file_path,
+                        line_start=item.lineno,
+                        line_end=item.end_lineno or item.lineno,
+                        signature=get_function_signature(item),
+                        docstring=get_docstring(item),
+                        parent=node.name,
+                        decorators=get_decorators(item)
+                    )
+                    file_symbols.symbols.append(method)
+        
+        # 顶级函数
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            symbol = SymbolInfo(
+                name=node.name,
+                symbol_type="function",
+                file_path=file_path,
+                line_start=node.lineno,
+                line_end=node.end_lineno or node.lineno,
+                signature=get_function_signature(node),
+                docstring=get_docstring(node),
+                decorators=get_decorators(node)
+            )
+            file_symbols.symbols.append(symbol)
+        
+        # 导入
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                file_symbols.imports.append(alias.name)
+        
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            for alias in node.names:
+                file_symbols.imports.append(f"{module}.{alias.name}" if module else alias.name)
+    
+    # 提取 __all__（导出列表）
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "__all__":
+                    if isinstance(node.value, (ast.List, ast.Tuple)):
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                file_symbols.exports.append(elt.value)
+    
+    return file_symbols
+
+
+def build_symbol_index(workspace_root: str, file_paths: List[str] = None) -> SymbolIndex:
+    """构建项目的符号索引
+    
+    Args:
+        workspace_root: 工作区根目录
+        file_paths: 要解析的文件列表（可选，默认解析所有 .py 文件）
+        
+    Returns:
+        SymbolIndex 对象
+    """
+    import os
+    
+    index = SymbolIndex()
+    
+    if file_paths is None:
+        # 自动扫描 Python 文件
+        file_paths = []
+        for root, dirs, files in os.walk(workspace_root):
+            # 跳过常见的忽略目录
+            dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', '.venv', 'venv', '.plans'}]
+            
+            for file in files:
+                if file.endswith('.py'):
+                    file_paths.append(os.path.join(root, file))
+    
+    for file_path in file_paths:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 计算相对路径
+            rel_path = os.path.relpath(file_path, workspace_root)
+            
+            file_symbols = parse_python_symbols(rel_path, content)
+            index.add_file_symbols(file_symbols)
+            
+        except Exception as e:
+            # 忽略读取/解析错误
+            pass
+    
+    return index
 

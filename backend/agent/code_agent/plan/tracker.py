@@ -8,6 +8,7 @@ import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from .models import Plan, PlanStep, StepStatus, StepResult
+# 避免循环导入，延迟导入 get_code_agent_prompt_loader
 
 
 class PlanTracker:
@@ -292,49 +293,18 @@ class PlanTracker:
         if not current_step:
             return ""
         
-        return f"""
-⚠️ **执行偏离检测**
-
-检测到的问题: {anomaly}
-
-请严格按照当前步骤执行:
-- **当前步骤**: Step {current_step.id}
-- **步骤描述**: {current_step.description}
-- **预期结果**: {current_step.expected_outcome}
-
-约束:
-1. 只执行当前步骤描述的内容
-2. 不要提前执行后续步骤
-3. 如果当前步骤有困难，请说明原因而不是跳过
-4. 完成后明确报告执行结果
-"""
-    
-    def get_step_prompt(self, step: PlanStep) -> str:
-        """生成步骤执行提示词"""
-        if not self.current_plan:
-            return ""
+        from ..prompts.prompt_loader import get_code_agent_prompt_loader
+        loader = get_code_agent_prompt_loader()
+        template = loader.get_correction_prompt()
         
-        return f"""
-## 当前任务
-{self.current_plan.task}
+        return template.format(
+            anomaly=anomaly,
+            step_id=current_step.id,
+            step_description=current_step.description,
+            expected_outcome=current_step.expected_outcome or "完成该步骤的操作"
+        )
+    
 
-## 执行计划概览
-{self.current_plan.to_summary()}
-
-## ⚠️ 当前步骤 (Step {step.id}/{len(self.current_plan.steps)})
-**【你必须且只能执行这一步】**
-
-{step.description}
-
-**预期结果**: {step.expected_outcome if step.expected_outcome else "完成该步骤的操作"}
-**可用工具**: {', '.join(step.tools_needed) if step.tools_needed else "所有可用工具"}
-
-## 约束
-1. 只执行当前步骤描述的内容
-2. 不要提前执行后续步骤
-3. 完成后报告结果
-4. 如果遇到阻碍，说明原因
-"""
     
     def get_progress_summary(self) -> Dict[str, Any]:
         """获取进度摘要"""

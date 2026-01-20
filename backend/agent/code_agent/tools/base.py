@@ -128,28 +128,10 @@ class FunctionCallHandler:
     """
     Function Calling 处理器
     处理 LLM 返回的工具调用
-    
-    支持步骤级权限控制：通过 set_allowed_tools 设置当前允许的工具列表
     """
     
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
-        self.allowed_tools: Optional[set] = None  # None 表示允许所有工具
-    
-    def set_allowed_tools(self, tools: Optional[set]):
-        """
-        设置当前步骤允许的工具
-        
-        Args:
-            tools: 允许的工具名称集合，None 表示允许所有
-        """
-        self.allowed_tools = tools
-        if tools:
-            logging.debug(f"FunctionCallHandler: Allowed tools set to {tools}")
-    
-    def clear_allowed_tools(self):
-        """清除工具限制"""
-        self.allowed_tools = None
     
     def parse_tool_calls(self, response) -> List[Dict[str, Any]]:
         """
@@ -219,19 +201,7 @@ class FunctionCallHandler:
                 })
                 continue
             
-            # 步骤级权限检查
-            if self.allowed_tools is not None and name not in self.allowed_tools:
-                logging.warning(f"FunctionCallHandler: Tool '{name}' not allowed in current step")
-                results.append({
-                    "tool_call_id": tc_id,
-                    "name": name,
-                    "arguments": args,
-                    "result": ToolResult(
-                        success=False, 
-                        error=f"工具 '{name}' 在当前步骤不被允许。允许的工具: {', '.join(self.allowed_tools)}"
-                    )
-                })
-                continue
+
             
             logging.info(f"FunctionCallHandler: Executing tool '{name}' with args: {args}")
             result = self.registry.execute(name, **args)

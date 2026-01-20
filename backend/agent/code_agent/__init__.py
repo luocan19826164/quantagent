@@ -2,8 +2,10 @@
 代码 Agent 模块
 提供 Python 量化代码生成和执行功能
 
-注意：CodeAgent 已废弃，请使用 PlanExecuteAgent
-PlanExecuteAgent 提供了向后兼容的 chat_stream() 接口
+核心类: PlanExecuteAgent (别名 CodeAgent)
+- 支持 Plan-Execute 架构，任务规划与执行
+- 提供 chat_stream() 流式对话接口
+- 通过工具系统执行文件操作和命令
 """
 
 # Plan-Execute Agent（唯一推荐使用的 Agent）
@@ -35,8 +37,25 @@ from .tools import (
 # 工作区管理
 from .workspace_manager import WorkspaceManager
 
-# 代码执行器
-from .executor import CodeExecutor, executor, ExecutionStatus, ExecutionResult
+# 事件系统
+from .events import (
+    EventType,
+    # 基础事件
+    BaseEvent, MessageEvent, ErrorEvent, StatusEvent, TokenEvent,
+    FileChangeEvent, AnomalyDetectedEvent, ReplanWarningEvent,
+    ResponseStartEvent, ResponseEndEvent,
+    # 计划生命周期
+    PlanCreatedEvent,
+    # 计划执行
+    PlanExecutionStartedEvent, PlanExecutionCompletedEvent,
+    PlanExecutionFailedEvent, PlanExecutionCancelledEvent,
+    # 步骤
+    StepStartedEvent, StepCompletedEvent, StepOutputEvent, StepErrorEvent,
+    # 工具
+    ToolCallsEvent, ToolResultEvent,
+    # 文件运行
+    FileRunStartedEvent, FileRunStdoutEvent, FileRunStderrEvent, FileRunExitEvent,
+)
 
 # 上下文定义
 from .context import (
@@ -49,6 +68,16 @@ from .context import (
     EnvironmentInfo,
     SafetyConfig,
     DEFAULT_TOOLS,
+    # Repo Map / Symbol Index
+    SymbolIndex,
+    SymbolInfo,
+    FileSymbols,
+    FileInfo,
+    ConversationHistory,
+    Message,
+    # 辅助函数
+    parse_python_symbols,
+    build_symbol_index,
 )
 
 __all__ = [
@@ -77,11 +106,17 @@ __all__ = [
     # 工作区
     'WorkspaceManager',
     
-    # 执行器
-    'CodeExecutor',
-    'executor',
-    'ExecutionStatus',
-    'ExecutionResult',
+    # 事件系统
+    'EventType',
+    'BaseEvent', 'MessageEvent', 'ErrorEvent', 'StatusEvent', 'TokenEvent',
+    'FileChangeEvent', 'AnomalyDetectedEvent', 'ReplanWarningEvent',
+    'ResponseStartEvent', 'ResponseEndEvent',
+    'PlanCreatedEvent',
+    'PlanExecutionStartedEvent', 'PlanExecutionCompletedEvent',
+    'PlanExecutionFailedEvent', 'PlanExecutionCancelledEvent',
+    'StepStartedEvent', 'StepCompletedEvent', 'StepOutputEvent', 'StepErrorEvent',
+    'ToolCallsEvent', 'ToolResultEvent',
+    'FileRunStartedEvent', 'FileRunStdoutEvent', 'FileRunStderrEvent', 'FileRunExitEvent',
     
     # 上下文
     'CodeAgentContext',
@@ -93,4 +128,14 @@ __all__ = [
     'EnvironmentInfo',
     'SafetyConfig',
     'DEFAULT_TOOLS',
+    
+    # Repo Map / Symbol Index
+    'SymbolIndex',
+    'SymbolInfo',
+    'FileSymbols',
+    'FileInfo',
+    'ConversationHistory',
+    'Message',
+    'parse_python_symbols',
+    'build_symbol_index',
 ]

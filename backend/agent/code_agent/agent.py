@@ -9,16 +9,36 @@ import os
 import json
 import logging
 import threading
-from typing import Dict, Any, List, Optional, Generator, Set
+from typing import Dict, Any, List, Optional, Generator
 from datetime import datetime
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 
 from .plan import Plan, PlanStep, PlanStatus, StepStatus, StepResult, PlanTracker, Planner, PlanStorage
-from .tools import create_tool_registry, ToolRegistry, FunctionCallHandler
+from .tools import create_tool_registry, ToolRegistry, FunctionCallHandler, CREATE_PLAN_TOOL_NAME
 from .workspace_manager import WorkspaceManager
-from .context import CodeContext
+from .context import (
+    CodeContext, CodeAgentContext, ConversationHistory, 
+    MemoryContext, ExecutionContext, OutputRecord
+)
 from .prompts.prompt_loader import get_code_agent_prompt_loader
+from .events import (
+    EventType,
+    # 基础事件
+    ErrorEvent, StatusEvent, FileChangeEvent, AnomalyDetectedEvent, ReplanWarningEvent,
+    ResponseStartEvent, ResponseEndEvent,
+    # 计划生命周期
+    PlanCreatedEvent,
+    # 计划执行
+    PlanExecutionStartedEvent, PlanExecutionCompletedEvent,
+    PlanExecutionFailedEvent, PlanExecutionCancelledEvent,
+    # 步骤
+    StepStartedEvent, StepCompletedEvent, StepOutputEvent, StepErrorEvent,
+    # 工具
+    ToolCallsEvent, ToolResultEvent,
+    # 文件运行
+    FileRunStartedEvent, FileRunStdoutEvent, FileRunStderrEvent, FileRunExitEvent,
+)
 from utils.llm_config import resolve_llm_config
 
 
@@ -28,9 +48,8 @@ class PlanExecuteAgent:
     
     这是 Code Agent 的统一入口，核心流程：
     1. PLAN: 生成执行计划
-    2. APPROVE: 用户审批计划（可选）
-    3. EXECUTE: 逐步执行（所有操作通过工具调用）
-    4. VERIFY: 验证结果
+    2. EXECUTE: 逐步执行（所有操作通过工具调用）
+    3. VERIFY: 验证结果
     
     安全保证：
     - 所有文件变更必须通过工具调用
@@ -105,10 +124,18 @@ class PlanExecuteAgent:
         plans_path = os.path.join(self.project_path, ".plans")
         self.plan_storage = PlanStorage(plans_path)
         
+        # 统一上下文管理（新增）
+        self.context = CodeAgentContext(
+            session_id=f"{user_id}_{project_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            project_id=project_id,
+            code_context=self.code_context,
+            conversation=ConversationHistory(max_messages=50),
+            memory=MemoryContext(),
+            execution_context=ExecutionContext()
+        )
+        
         # 会话状态
-        self.conversation_history: List[Dict] = []
         self.current_plan: Optional[Plan] = None
-        self.auto_approve: bool = False
         
         # 尝试恢复未完成的计划
         self._try_restore_plan()
@@ -203,53 +230,70 @@ class PlanExecuteAgent:
         """
         流式聊天接口（兼容原 CodeAgent.chat_stream）
         
-        这是一个便捷方法，等同于 run(task, auto_approve=True)
+        LLM 会自主决定执行模式（Plan 或 Direct）。
         
         Args:
             user_input: 用户输入
             
         Yields:
             事件字典:
-            - {"type": "token", "content": "..."}
-            - {"type": "plan_created", "plan": {...}}
+            - {"type": "response_start", "mode": "plan"|"direct"}
+            - {"type": "plan_created", "plan": {...}}  # 仅 Plan 模式
             - {"type": "step_started", "step_id": 1, ...}
             - {"type": "tool_result", ...}
             - {"type": "file_change", "path": "..."}
-            - {"type": "done", "file_changes": [...]}
+            - {"type": "response_end"}
             - {"type": "error", "message": "..."}
         """
         self._cancel_flag.clear()
         all_file_changes = []
         
+        # 记录用户消息到对话历史
+        self.context.conversation.add_user_message(user_input)
+        
         try:
-            for event in self.run(user_input, auto_approve=True):
+            for event in self.run(user_input):
                 event_type = event.get("type")
                 
-                # 直接透传大部分事件，前端会处理
-                if event_type == "step_completed":
+                # 收集文件变更
+                if event_type == EventType.STEP_COMPLETED.value:
                     files = event.get("files_changed", [])
                     for f in files:
                         if f not in all_file_changes:
                             all_file_changes.append(f)
-                            yield {"type": "file_change", "path": f}
+                            yield FileChangeEvent(path=f).to_dict()
                     yield event
-                elif event_type == "execution_completed":
-                    # 添加汇总的文件变更
-                    yield {
-                        "type": "plan_completed",
-                        "file_changes": all_file_changes,
-                        "success": True,
-                        "summary": event.get("summary", "")
-                    }
-                elif event_type == "error":
-                    yield {"type": "error", "message": event.get("error", "Unknown error")}
+                elif event_type == EventType.FILE_CHANGE.value:
+                    path = event.get("path")
+                    if path and path not in all_file_changes:
+                        all_file_changes.append(path)
+                    yield event
+                elif event_type == EventType.PLAN_EXECUTION_COMPLETED.value:
+                    # 补充文件变更列表
+                    event_file_changes = event.get("file_changes", [])
+                    for f in event_file_changes:
+                        if f not in all_file_changes:
+                            all_file_changes.append(f)
+                    yield PlanExecutionCompletedEvent(
+                        plan=event.get("plan"),
+                        message=event.get("message", ""),
+                        summary=event.get("summary", ""),
+                        success=event.get("success", True),
+                        file_changes=all_file_changes
+                    ).to_dict()
+                elif event_type == EventType.ERROR.value:
+                    yield ErrorEvent(error=event.get("error", "Unknown error")).to_dict()
                 else:
-                    # 直接透传其他事件
+                    # 直接透传其他事件（包括 response_start, response_end）
                     yield event
+            
+            # 发送响应结束事件
+            yield ResponseEndEvent().to_dict()
                     
         except Exception as e:
             logging.error(f"chat_stream error: {e}", exc_info=True)
-            yield {"type": "error", "message": str(e)}
+            yield ErrorEvent(error=str(e)).to_dict()
+            yield ResponseEndEvent().to_dict()
     
     def execute_file(self, file_path: str, timeout: str = "5min") -> Generator[Dict[str, Any], None, None]:
         """
@@ -267,7 +311,7 @@ class PlanExecuteAgent:
         logging.info(f"[execute_file] Starting: {file_path}, timeout: {timeout_seconds}s")
         
         # 先发送开始事件
-        yield {"type": "started", "file": file_path}
+        yield FileRunStartedEvent(file=file_path).to_dict()
         
         # 使用 shell_exec 工具执行
         result = self.tool_registry.execute(
@@ -288,26 +332,22 @@ class PlanExecuteAgent:
         
         if result.success:
             if result.data and result.data.get("stdout"):
-                # 前端期望 content 字段
-                yield {"type": "stdout", "content": result.data["stdout"]}
+                yield FileRunStdoutEvent(content=result.data["stdout"]).to_dict()
             if result.data and result.data.get("stderr"):
-                yield {"type": "stderr", "content": result.data["stderr"]}
-            # 前端期望 exit 事件
+                yield FileRunStderrEvent(content=result.data["stderr"]).to_dict()
             exit_code = result.data.get("exit_code", 0) if result.data else 0
             logging.info(f"[execute_file] Completed: exit_code={exit_code}")
-            yield {
-                "type": "exit",
-                "exit_code": exit_code,
-                "duration": result.data.get("duration", 0) if result.data else 0
-            }
+            yield FileRunExitEvent(
+                exit_code=exit_code,
+                duration=result.data.get("duration", 0) if result.data else 0
+            ).to_dict()
         else:
             logging.info(f"[execute_file] Failed: {result.error}")
-            yield {"type": "stderr", "content": result.error or "Execution failed"}
-            yield {
-                "type": "exit",
-                "exit_code": result.data.get("exit_code", 1) if result.data else 1,
-                "duration": result.data.get("duration", 0) if result.data else 0
-            }
+            yield FileRunStderrEvent(content=result.error or "Execution failed").to_dict()
+            yield FileRunExitEvent(
+                exit_code=result.data.get("exit_code", 1) if result.data else 1,
+                duration=result.data.get("duration", 0) if result.data else 0
+            ).to_dict()
     
     def stop_execution(self) -> bool:
         """停止执行"""
@@ -328,156 +368,241 @@ class PlanExecuteAgent:
             "is_executing": self.is_executing(),
             "has_plan": self.current_plan is not None,
             "plan_status": self.current_plan.status.value if self.current_plan else None,
+            # 新增：完整上下文信息
+            "context": self.context.to_dict() if self.context else None,
         }
     
     # ==================== 核心执行流程 ====================
     
-    def run(self, task: str, auto_approve: bool = False) -> Generator[Dict[str, Any], None, None]:
+    def run(self, task: str) -> Generator[Dict[str, Any], None, None]:
         """
         执行任务（流式）
         
+        LLM 自主决定执行模式：
+        - 如果 LLM 调用 create_plan 工具 → Plan 模式（生成计划后逐步执行）
+        - 如果 LLM 直接调用其他工具 → Direct 模式（工具调用循环）
+        
         Args:
             task: 用户任务描述
-            auto_approve: 是否自动审批计划
             
         Yields:
             事件字典
         """
-        self.auto_approve = auto_approve
         self._executing = True
         self._cancel_flag.clear()
         
         try:
-            # ========== Phase 1: 生成计划 ==========
-            yield {"type": "status", "message": "正在分析任务并生成计划..."}
+            yield StatusEvent(message="正在分析任务...").to_dict()
             
-            context = self._build_project_context()
-            plan = self.planner.create_plan_sync(task, context)
-            self.current_plan = plan
-            self.tracker.set_plan(plan)
+            # ========== 第一次 LLM 调用：让 LLM 决定模式 ==========
+            messages = self._build_initial_messages(task)
+            tool_definitions = self.tool_registry.get_all_definitions()
             
-            # 持久化保存计划
-            self.plan_storage.save_plan(plan)
+            response = self.llm.invoke(messages, tools=tool_definitions)
             
-            yield {
-                "type": "plan_created",
-                "plan": plan.to_dict(),
-                "message": f"已生成执行计划，共 {len(plan.steps)} 个步骤"
-            }
+            # 解析工具调用
+            tool_calls = self.function_handler.parse_tool_calls(response)
             
-            # ========== Phase 2: 等待审批 ==========
-            if not auto_approve:
-                plan.status = PlanStatus.AWAITING_APPROVAL
-                yield {
-                    "type": "awaiting_approval",
-                    "plan": plan.to_dict(),
-                    "message": "请审批执行计划"
-                }
-                return  # 等待用户调用 approve_plan 或 reject_plan
+            # 检查是否调用了 create_plan
+            create_plan_call = None
+            other_tool_calls = []
             
-            # 自动审批模式，继续执行
-            yield from self._execute_plan(plan)
+            for tc in tool_calls:
+                if tc["name"] == CREATE_PLAN_TOOL_NAME:
+                    create_plan_call = tc
+                else:
+                    other_tool_calls.append(tc)
+            
+            if create_plan_call:
+                # ========== Plan 模式（多步骤计划）==========
+                logging.info(f"Agent: LLM chose Plan mode")
+                yield from self._execute_plan_mode(task, create_plan_call, messages, response)
+            else:
+                # ========== Direct 模式（统一为单步骤 Plan）==========
+                logging.info(f"Agent: LLM chose Direct mode (converted to single-step plan)")
+                yield from self._execute_direct_as_plan(task, response, messages, tool_calls)
             
         except Exception as e:
             logging.error(f"Agent run error: {e}", exc_info=True)
-            yield {"type": "error", "error": str(e)}
+            yield ErrorEvent(error=str(e)).to_dict()
         finally:
             self._executing = False
     
-    def approve_plan(self, modified_plan: Dict = None) -> Generator[Dict[str, Any], None, None]:
+    def _build_initial_messages(self, task: str) -> List:
         """
-        审批计划并开始执行
+        构建首次 LLM 调用的消息（Direct 和 Plan 模式共用）
         
-        Args:
-            modified_plan: 用户修改后的计划（可选）
+        包含：
+        - 系统提示词（从 YAML 加载）
+        - 模式选择指导（从 YAML 加载）
+        - 上下文摘要（记忆、规范、活跃文件、Repo Map）
+        - 对话历史（如果有）
         """
-        if not self.current_plan:
-            yield {"type": "error", "error": "没有待审批的计划"}
-            return
+        # 加载系统提示词和模式选择指导（从 YAML）
+        prompt_loader = get_code_agent_prompt_loader()
+        system_prompt = prompt_loader.get_system_prompt()
+        mode_guidance = prompt_loader.get_mode_guidance()
         
-        if self.current_plan.status != PlanStatus.AWAITING_APPROVAL:
-            yield {"type": "error", "error": f"计划状态错误: {self.current_plan.status.value}"}
-            return
+        # 构建上下文摘要（不包含代码完整内容，避免首次调用 token 过多）
+        context_summary = self._build_context_for_llm(
+            include_conversation=False,
+            include_code_content=False  # 首次调用不包含完整代码内容
+        )
         
-        # 如果用户修改了计划
-        if modified_plan:
-            try:
-                self.current_plan = Plan.from_dict(modified_plan)
-                self.tracker.set_plan(self.current_plan)
-                yield {"type": "plan_modified", "plan": self.current_plan.to_dict()}
-            except Exception as e:
-                yield {"type": "error", "error": f"计划格式错误: {e}"}
-                return
+        # 组装系统消息
+        system_content = system_prompt
+        if mode_guidance:
+            system_content += f"\n\n{mode_guidance}"
+        if context_summary:
+            system_content += f"\n\n## 当前上下文\n{context_summary}"
         
-        self._executing = True
-        try:
-            yield {"type": "plan_approved", "message": "计划已审批，开始执行"}
-            yield from self._execute_plan(self.current_plan)
-        finally:
-            self._executing = False
+        messages = [SystemMessage(content=system_content)]
+        
+        # 添加对话历史（如果有）
+        if self.context.conversation and self.context.conversation.messages:
+            # 只添加最近的对话历史，避免 token 过多
+            recent_messages = self.context.conversation.get_recent_messages(n=10)
+            if recent_messages:
+                history = ConversationHistory(messages=recent_messages).to_langchain_messages()
+                messages.extend(history)
+                logging.info(f"Context: Added {len(recent_messages)} recent conversation messages")
+        
+        # 添加当前用户消息
+        messages.append(HumanMessage(content=task))
+        
+        return messages
     
-    def reject_plan(self, reason: str = "") -> Generator[Dict[str, Any], None, None]:
-        """拒绝计划"""
-        if not self.current_plan:
-            yield {"type": "error", "error": "没有待审批的计划"}
-            return
+    def _execute_plan_mode(self, task: str, create_plan_call: Dict, 
+                           messages: List, initial_response) -> Generator[Dict[str, Any], None, None]:
+        """执行 Plan 模式"""
+        yield ResponseStartEvent(mode="plan").to_dict()
         
-        self.current_plan.status = PlanStatus.CANCELLED
-        yield {
-            "type": "plan_rejected",
-            "reason": reason,
-            "message": "计划已取消"
-        }
-        self.current_plan = None
+        # 从工具调用中提取计划数据
+        plan_args = create_plan_call.get("arguments", {})
+        analysis = plan_args.get("analysis", "")
+        steps_data = plan_args.get("steps", [])
+        
+        # 构建 Plan 对象
+        steps = []
+        for i, step_data in enumerate(steps_data):
+            steps.append(PlanStep(
+                id=i + 1,
+                description=step_data.get("description", ""),
+                expected_outcome=step_data.get("expected_outcome", ""),
+                tools_needed=step_data.get("tools", [])
+            ))
+        
+        plan = Plan(
+            task=task,
+            steps=steps,
+            status=PlanStatus.PLANNING
+        )
+        
+        self.current_plan = plan
+        self.tracker.set_plan(plan)
+        
+        # 持久化保存计划
+        self.plan_storage.save_plan(plan)
+        
+        yield PlanCreatedEvent(
+            plan=plan.to_dict(),
+            message=f"已生成执行计划，共 {len(plan.steps)} 个步骤\n\n分析: {analysis}"
+        ).to_dict()
+        
+        # 执行计划
+        yield from self._execute_plan(plan)
     
-    def cancel_execution(self) -> Dict[str, Any]:
-        """取消正在执行的任务"""
+    def _execute_direct_as_plan(self, task: str, initial_response, 
+                                messages: List, initial_tool_calls: List) -> Generator[Dict[str, Any], None, None]:
+        """
+        将 Direct 模式转换为单步骤 Plan 并执行
+        
+        统一执行流程：Direct 模式 = 单步骤 Plan
+        """
+        yield ResponseStartEvent(mode="direct").to_dict()
+        
+        # 创建隐式单步骤 Plan
+        step = PlanStep(
+            id=1,
+            description=task,  # 直接用 task 作为步骤描述
+            expected_outcome="完成任务",
+            status=StepStatus.PENDING
+        )
+        
+        plan = Plan(
+            task=task,
+            steps=[step],
+            status=PlanStatus.PLANNING
+        )
+        
+        self.current_plan = plan
+        self.tracker.set_plan(plan)
+        
+        # Direct 模式不发送 PlanCreatedEvent（因为是隐式的）
+        # 直接开始执行
+        
+        # 执行计划（单步骤）
+        yield from self._execute_plan(plan, initial_response=initial_response, 
+                                     initial_tool_calls=initial_tool_calls, 
+                                     initial_messages=messages)
+    
+    def cancel_plan_execution(self) -> Dict[str, Any]:
+        """取消正在执行的计划"""
         if self.current_plan and self.current_plan.status == PlanStatus.EXECUTING:
             self._cancel_flag.set()
             self.current_plan.status = PlanStatus.CANCELLED
-            return {"success": True, "message": "执行已取消"}
-        return {"success": False, "message": "没有正在执行的任务"}
+            return {"success": True, "message": "计划执行已取消"}
+        return {"success": False, "message": "没有正在执行的计划"}
     
-    def _execute_plan(self, plan: Plan) -> Generator[Dict[str, Any], None, None]:
-        """执行计划"""
+    def _execute_plan(self, plan: Plan, 
+                     initial_response=None, 
+                     initial_tool_calls: List = None,
+                     initial_messages: List = None) -> Generator[Dict[str, Any], None, None]:
+        """
+        执行计划
+        
+        Args:
+            plan: 执行计划
+            initial_response: 初始 LLM 响应（Direct 模式需要）
+            initial_tool_calls: 初始工具调用列表（Direct 模式需要）
+            initial_messages: 初始消息列表（Direct 模式需要）
+        """
         plan.status = PlanStatus.EXECUTING
         
-        yield {
-            "type": "execution_started",
-            "plan": plan.to_dict(),
-            "message": "开始执行计划"
-        }
-        
-        # 设置当前计划允许的工具
-        allowed_tools = self._get_plan_allowed_tools(plan)
-        self.function_handler.set_allowed_tools(allowed_tools)
+        yield PlanExecutionStartedEvent(
+            plan=plan.to_dict(),
+            message="开始执行计划"
+        ).to_dict()
         
         # 逐步执行
-        for step in plan.steps:
+        for step_idx, step in enumerate(plan.steps):
             # 检查取消标志
             if self._cancel_flag.is_set():
                 plan.status = PlanStatus.CANCELLED
-                yield {"type": "execution_cancelled", "message": "执行已取消"}
+                yield PlanExecutionCancelledEvent(message="执行已取消").to_dict()
                 return
             
             if plan.status == PlanStatus.CANCELLED:
-                yield {"type": "execution_cancelled", "message": "执行已取消"}
+                yield PlanExecutionCancelledEvent(message="执行已取消").to_dict()
                 return
             
             # 跳过已完成的步骤
             if step.status in (StepStatus.DONE, StepStatus.SKIPPED):
                 continue
             
-            # 设置当前步骤允许的工具
-            step_tools = self._get_step_allowed_tools(step, plan)
-            self.function_handler.set_allowed_tools(step_tools)
-            
             # 执行步骤
-            yield from self._execute_step(step, plan)
+            # 如果是 Direct 模式（单步骤 Plan）且是第一步，传入初始响应
+            is_direct_mode = (len(plan.steps) == 1 and initial_response is not None)
+            yield from self._execute_step(
+                step, plan,
+                initial_response=initial_response if (is_direct_mode and step_idx == 0) else None,
+                initial_tool_calls=initial_tool_calls if (is_direct_mode and step_idx == 0) else None,
+                initial_messages=initial_messages if (is_direct_mode and step_idx == 0) else None
+            )
             
             # 检查是否需要重新规划（仅警告，不中断执行）
             if self.tracker.should_replan():
-                yield {"type": "replan_warning", "message": "检测到执行问题，可能需要关注"}
+                yield ReplanWarningEvent(message="检测到执行问题，可能需要关注").to_dict()
                 # 重置异常计数，继续执行
                 self.tracker.anomaly_count = 0
                 # 注意：这里不再 break，继续执行剩余步骤
@@ -485,12 +610,11 @@ class PlanExecuteAgent:
             # 检查步骤是否失败
             if step.status == StepStatus.FAILED:
                 plan.status = PlanStatus.FAILED
-                yield {
-                    "type": "execution_failed",
-                    "step_id": step.id,
-                    "error": step.error,
-                    "message": f"Step {step.id} 执行失败"
-                }
+                yield PlanExecutionFailedEvent(
+                    step_id=step.id,
+                    error=step.error,
+                    message=f"Step {step.id} 执行失败"
+                ).to_dict()
                 return
         
         # 检查是否全部完成
@@ -498,43 +622,112 @@ class PlanExecuteAgent:
             plan.status = PlanStatus.COMPLETED
             # 归档已完成的计划
             self.plan_storage.archive_plan(plan)
-            yield {
-                "type": "execution_completed",
-                "plan": plan.to_dict(),
-                "message": "所有步骤执行完成",
-                "summary": self._generate_summary(plan)
-            }
+            summary = self._generate_summary(plan)
+            
+            # 判断是否为 Direct 模式（单步骤 Plan）
+            is_direct_mode = (len(plan.steps) == 1)
+            
+            # 记录执行决策到 MemoryContext
+            if is_direct_mode:
+                # Direct 模式：记录为 Direct 模式完成
+                all_file_changes = []
+                for step in plan.steps:
+                    all_file_changes.extend(step.files_changed)
+                if all_file_changes:
+                    self.context.memory.add_decision(
+                        decision=f"Direct 模式完成: {plan.task[:50]}...",
+                        reason=f"修改了文件: {', '.join(all_file_changes[:5])}"
+                    )
+            else:
+                # Plan 模式：记录为计划完成
+                self.context.memory.add_decision(
+                    decision=f"完成任务: {plan.task}",
+                    reason=summary
+                )
+            
+            # 计算文件变更
+            all_file_changes = []
+            for step in plan.steps:
+                all_file_changes.extend(step.files_changed)
+            
+            # Direct 模式：计算迭代次数（通过 tool_calls 数量估算）
+            if is_direct_mode and plan.steps[0].tool_calls:
+                iteration_count = len([tc for tc in plan.steps[0].tool_calls if isinstance(tc, dict)])
+                direct_summary = f"Direct 模式执行完成，共 {iteration_count} 轮对话"
+            else:
+                direct_summary = summary
+            
+            yield PlanExecutionCompletedEvent(
+                plan=plan.to_dict(),
+                message="所有步骤执行完成" if not is_direct_mode else "任务完成",
+                summary=direct_summary if is_direct_mode else summary,
+                success=True,
+                file_changes=list(set(all_file_changes))
+            ).to_dict()
         elif plan.has_failed():
             plan.status = PlanStatus.FAILED
             # 保存失败状态
             self.plan_storage.save_plan(plan)
-            yield {
-                "type": "execution_failed",
-                "plan": plan.to_dict(),
-                "message": "部分步骤执行失败"
-            }
+            
+            # 记录失败到 MemoryContext
+            self.context.memory.add_decision(
+                decision=f"任务失败: {plan.task}",
+                reason="部分步骤执行失败"
+            )
+            
+            yield PlanExecutionFailedEvent(
+                plan=plan.to_dict(),
+                message="部分步骤执行失败"
+            ).to_dict()
     
-    def _execute_step(self, step: PlanStep, plan: Plan) -> Generator[Dict[str, Any], None, None]:
-        """执行单个步骤"""
+    def _execute_step(self, step: PlanStep, plan: Plan,
+                     initial_response=None,
+                     initial_tool_calls: List = None,
+                     initial_messages: List = None) -> Generator[Dict[str, Any], None, None]:
+        """
+        执行单个步骤
+        
+        Args:
+            step: 计划步骤
+            plan: 执行计划
+            initial_response: 初始 LLM 响应（Direct 模式需要）
+            initial_tool_calls: 初始工具调用列表（Direct 模式需要）
+            initial_messages: 初始消息列表（Direct 模式需要）
+        """
         self.tracker.start_step(step.id)
         
-        yield {
-            "type": "step_started",
-            "step_id": step.id,
-            "description": step.description,
-            "progress": plan.get_progress()
-        }
+        yield StepStartedEvent(
+            step_id=step.id,
+            description=step.description,
+            progress=plan.get_progress()
+        ).to_dict()
         
         try:
             # 构建步骤执行消息
-            messages = self._build_step_messages(step, plan)
+            is_direct_mode = (initial_response is not None)
+            if is_direct_mode:
+                # Direct 模式：使用初始消息（已经包含对话历史）
+                messages = initial_messages.copy() if initial_messages else []
+            else:
+                # Plan 模式：构建步骤消息
+                messages = self._build_step_messages(step, plan)
             
             # 工具调用循环
-            max_iterations = 10
+            max_iterations = 15 if is_direct_mode else 10  # Direct 模式允许更多迭代
             iteration = 0
             step_response = ""
             all_tool_calls = []
             all_files_changed = []
+            
+            # Direct 模式：先处理初始工具调用
+            if is_direct_mode and initial_tool_calls:
+                current_response = initial_response
+                current_tool_calls = initial_tool_calls
+                # 过滤掉 create_plan（Direct 模式中不应该调用）
+                current_tool_calls = [tc for tc in current_tool_calls if tc["name"] != CREATE_PLAN_TOOL_NAME]
+            else:
+                current_response = None
+                current_tool_calls = None
             
             while iteration < max_iterations:
                 # 检查取消标志
@@ -546,31 +739,41 @@ class PlanExecuteAgent:
                 iteration += 1
                 logging.info(f"Step {step.id} iteration {iteration}")
                 
-                # 获取可用工具定义
-                tool_definitions = self.tool_registry.get_all_definitions()
-                logging.debug(f"Available tools: {[t['function']['name'] for t in tool_definitions]}")
-                
-                # 调用 LLM（使用 invoke 确保工具调用被正确获取）
-                # 流式模式下工具调用可能无法正确解析，改用非流式调用
-                response = self.llm.invoke(
-                    messages,
-                    tools=tool_definitions
-                )
-                
-                response_content = response.content or ""
+                # 如果是第一次迭代且是 Direct 模式，使用初始响应
+                if iteration == 1 and is_direct_mode and current_response is not None:
+                    response = current_response
+                    response_content = response.content or ""
+                else:
+                    # 获取可用工具定义
+                    tool_definitions = self.tool_registry.get_all_definitions()
+                    logging.debug(f"Available tools: {[t['function']['name'] for t in tool_definitions]}")
+                    
+                    # 调用 LLM（使用 invoke 确保工具调用被正确获取）
+                    # 流式模式下工具调用可能无法正确解析，改用非流式调用
+                    response = self.llm.invoke(
+                        messages,
+                        tools=tool_definitions
+                    )
+                    
+                    response_content = response.content or ""
+                    current_response = response
                 
                 # 输出 LLM 响应内容
                 if response_content:
                     step_response += response_content + "\n"
-                    yield {
-                        "type": "step_output",
-                        "step_id": step.id,
-                        "content": response_content
-                    }
+                    yield StepOutputEvent(
+                        step_id=step.id,
+                        content=response_content
+                    ).to_dict()
                     logging.info(f"Step {step.id}: LLM response: {response_content[:200]}...")
                 
                 # 检查是否有工具调用
-                tool_calls = self.function_handler.parse_tool_calls(response)
+                if iteration == 1 and is_direct_mode and current_tool_calls is not None:
+                    # Direct 模式第一次迭代：使用初始工具调用
+                    tool_calls = current_tool_calls
+                else:
+                    tool_calls = self.function_handler.parse_tool_calls(response)
+                    current_tool_calls = tool_calls
                 
                 if tool_calls:
                     logging.info(f"Step {step.id}: Found {len(tool_calls)} tool calls: {[tc['name'] for tc in tool_calls]}")
@@ -581,12 +784,18 @@ class PlanExecuteAgent:
                     # 没有工具调用，步骤完成
                     break
                 
+                # Direct 模式：过滤掉 create_plan（不应该在 Direct 模式中调用）
+                if is_direct_mode:
+                    tool_calls = [tc for tc in tool_calls if tc["name"] != CREATE_PLAN_TOOL_NAME]
+                    if not tool_calls:
+                        # 如果过滤后没有工具调用，步骤完成
+                        break
+                
                 # 执行工具调用
-                yield {
-                    "type": "tool_calls",
-                    "step_id": step.id,
-                    "calls": [{"name": tc["name"], "arguments": tc["arguments"]} for tc in tool_calls]
-                }
+                yield ToolCallsEvent(
+                    step_id=step.id,
+                    calls=[{"name": tc["name"], "arguments": tc["arguments"]} for tc in tool_calls]
+                ).to_dict()
                 
                 for tc in tool_calls:
                     logging.info(f"  🔧 Tool: {tc['name']} args: {str(tc['arguments'])[:100]}")
@@ -601,6 +810,12 @@ class PlanExecuteAgent:
                 if changed_files:
                     logging.info(f"  📁 Files changed: {changed_files}")
                 
+                # 记录 assistant 消息（包含工具调用）
+                self.context.conversation.add_assistant_message(
+                    content=response_content or "",
+                    tool_calls=[{"id": tc["id"], "name": tc["name"], "args": tc["arguments"]} for tc in tool_calls]
+                )
+                
                 # 输出工具结果并更新代码上下文
                 for tr in tool_results:
                     result = tr["result"]
@@ -610,26 +825,34 @@ class PlanExecuteAgent:
                     # 更新代码上下文（活跃文件）
                     self._update_code_context(tr["name"], tr["arguments"], result)
                     
-                    yield {
-                        "type": "tool_result",
-                        "step_id": step.id,
-                        "tool": tr["name"],
-                        "success": result.success,
-                        "output": result.output[:500] if result.output else "",
-                        "error": result.error
-                    }
+                    # 记录工具结果到对话历史
+                    file_path = tr["arguments"].get("path") or tr["arguments"].get("file_path")
+                    self.context.conversation.add_tool_result(
+                        tool_call_id=tr["tool_call_id"],
+                        tool_name=tr["name"],
+                        result=result.to_message()[:500],  # 截断，完整内容在 focused_files 中
+                        file_path=file_path
+                    )
+                    
+                    yield ToolResultEvent(
+                        step_id=step.id,
+                        tool=tr["name"],
+                        success=result.success,
+                        output=result.output[:500] if result.output else "",
+                        error=result.error
+                    ).to_dict()
                 
-                # 异常检测
-                anomaly = self.tracker.detect_anomaly(step_response, tool_calls)
-                if anomaly:
-                    yield {
-                        "type": "anomaly_detected",
-                        "step_id": step.id,
-                        "anomaly": anomaly
-                    }
-                    # 添加修正提示
-                    correction = self.tracker.get_correction_prompt(anomaly)
-                    messages.append(HumanMessage(content=correction))
+                # 异常检测（Plan 模式才有，Direct 模式跳过）
+                if not is_direct_mode:
+                    anomaly = self.tracker.detect_anomaly(step_response, tool_calls)
+                    if anomaly:
+                        yield AnomalyDetectedEvent(
+                            step_id=step.id,
+                            anomaly=anomaly
+                        ).to_dict()
+                        # 添加修正提示
+                        correction = self.tracker.get_correction_prompt(anomaly)
+                        messages.append(HumanMessage(content=correction))
                 
                 # 添加工具结果到消息
                 # LangChain AIMessage 期望的 tool_calls 格式: {"id": str, "name": str, "args": dict}
@@ -663,183 +886,164 @@ class PlanExecuteAgent:
                 plan.id, step.id, StepStatus.DONE, result
             )
             
-            yield {
-                "type": "step_completed",
-                "step_id": step.id,
-                "files_changed": result.files_changed,
-                "progress": plan.get_progress()
-            }
+            yield StepCompletedEvent(
+                step_id=step.id,
+                files_changed=result.files_changed,
+                progress=plan.get_progress()
+            ).to_dict()
             
         except Exception as e:
             logging.error(f"Step {step.id} execution error: {e}", exc_info=True)
             self.tracker.fail_step(step.id, str(e))
-            yield {
-                "type": "step_error",
-                "step_id": step.id,
-                "error": str(e)
-            }
+            yield StepErrorEvent(
+                step_id=step.id,
+                error=str(e)
+            ).to_dict()
     
-    def _get_plan_allowed_tools(self, plan: Plan) -> Set[str]:
-        """获取计划级别允许的工具"""
-        # 基础工具总是允许
-        allowed = {
-            "read_file", "list_directory", "grep", "get_file_outline",
-            "semantic_search",  # RAG 搜索
-        }
-        
-        # 根据计划类型添加工具
-        # 需要创建/写入文件的关键词
-        write_keywords = ["创建", "写入", "生成", "实现", "添加", "新增", "编写", "构建"]
-        if any(any(kw in s.description for kw in write_keywords) for s in plan.steps):
-            allowed.add("write_file")
-            allowed.add("patch_file")
-        
-        # 需要修改文件的关键词
-        modify_keywords = ["修改", "更新", "编辑", "调整", "优化", "重构", "整合"]
-        if any(any(kw in s.description for kw in modify_keywords) for s in plan.steps):
-            allowed.add("write_file")
-            allowed.add("patch_file")
-        
-        if any("删除" in s.description for s in plan.steps):
-            allowed.add("delete_file")
-        
-        # 需要执行命令的关键词
-        exec_keywords = ["执行", "运行", "测试", "安装", "验证"]
-        if any(any(kw in s.description for kw in exec_keywords) for s in plan.steps):
-            allowed.add("shell_exec")
-        
-        if any("备份" in s.description or "版本" in s.description for s in plan.steps):
-            allowed.update(["create_backup", "list_versions", "restore_version"])
-        
-        return allowed
-    
-    def _get_step_allowed_tools(self, step: PlanStep, plan: Plan) -> Set[str]:
-        """获取步骤级别允许的工具"""
-        # 从计划级别开始
-        allowed = self._get_plan_allowed_tools(plan)
-        
-        desc = step.description.lower()
-        
-        # 判断是否为明确的只读步骤（仅包含只读动词，不包含写入动词）
-        readonly_verbs = ["查看", "读取", "检查", "分析", "了解", "确认"]
-        write_verbs = ["创建", "写入", "生成", "实现", "添加", "编写", "修改", "更新"]
-        
-        is_readonly = any(v in desc for v in readonly_verbs)
-        has_write = any(v in desc for v in write_verbs)
-        
-        # 只有纯只读步骤才移除写权限
-        if is_readonly and not has_write:
-            allowed.discard("write_file")
-            allowed.discard("patch_file")
-            allowed.discard("delete_file")
-        
-        return allowed
+
     
     def _build_step_messages(self, step: PlanStep, plan: Plan) -> List:
-        """构建步骤执行消息"""
-        # 从配置加载系统提示词
+        """
+        构建步骤执行消息（Plan 模式）
+        
+        使用统一的上下文构建方法，与 Direct 模式保持一致。
+        """
         prompt_loader = get_code_agent_prompt_loader()
+        
+        # 1. 基础系统提示词（Plan 模式特有）
         step_execution_prompt = prompt_loader.get_step_execution_prompt()
         
-        # 系统消息
-        system_content = step_execution_prompt + f"""
-
-## 项目信息
-- 项目名称: {self.project_name}
-- 项目路径: {self.project_path}
-
-## 可用工具
-{self._format_tools_description()}
-
-## 当前步骤允许的工具
-{', '.join(self.function_handler.allowed_tools or ['全部'])}
-"""
+        # 2. 项目上下文（Plan 模式特有）
+        project_context_template = prompt_loader.get_project_context()
+        project_context = project_context_template.format(
+            project_name=self.project_name,
+            project_path=self.project_path,
+            tools_description=self._format_tools_description()
+        )
         
-        # 步骤提示
-        step_prompt = self.tracker.get_step_prompt(step)
+        # 3. 统一的上下文摘要（包含代码完整内容，Plan 模式需要）
+        context_summary = self._build_context_for_llm(
+            include_conversation=False,  # 对话历史单独添加
+            include_code_content=True    # Plan 模式需要完整代码内容
+        )
         
-        # 添加活跃文件警告（放在步骤提示之后、代码内容之前）
-        if self.code_context.focused_files:
-            active_files = [f.path for f in self.code_context.focused_files]
-            step_prompt += f"""
-
-## ⚠️ 活跃文件约束（重要！）
-以下 {len(active_files)} 个文件内容已加载到下方上下文中，**不要再调用 read_file 读取它们**：
-{chr(10).join(f'- {path}' for path in active_files)}
-
-只有当文件不在此列表中时，才需要调用 read_file。
-"""
+        # 组装系统消息
+        system_template = prompt_loader.get_step_system_message()
+        final_system_content = system_template.format(
+            step_execution_prompt=step_execution_prompt,
+            project_context=project_context,
+            active_files_warning="",  # 已包含在 context_summary 中
+            code_context=context_summary if context_summary else ""
+        )
         
-        # 添加代码上下文（文件内容）
-        code_context = self._get_relevant_context(step)
-        if code_context:
-            step_prompt += f"\n\n## 相关代码上下文\n{code_context}"
+        messages = [SystemMessage(content=final_system_content)]
         
-        return [
-            SystemMessage(content=system_content),
-            HumanMessage(content=step_prompt)
-        ]
+        # 4. 添加对话历史（统一处理，与 Direct 模式一致）
+        if self.context.conversation and self.context.conversation.messages:
+            # 只添加最近的对话历史，避免 token 过多
+            recent_messages = self.context.conversation.get_recent_messages(n=10)
+            if recent_messages:
+                history = ConversationHistory(messages=recent_messages).to_langchain_messages()
+                messages.extend(history)
+                logging.info(f"Context: Added {len(recent_messages)} recent conversation messages to step {step.id}")
+        
+        # 5. 用户消息（当前步骤）
+        user_message_template = prompt_loader.get_step_user_message()
+        user_message = user_message_template.format(
+            task=plan.task,
+            plan_summary=plan.to_summary(),
+            step_id=step.id,
+            total_steps=len(plan.steps),
+            step_description=step.description,
+            expected_outcome=step.expected_outcome or "完成该步骤的操作"
+        )
+        messages.append(HumanMessage(content=user_message))
+        
+        return messages
     
-    def _build_project_context(self) -> str:
-        """构建项目上下文"""
-        context_parts = []
-        
-        # 文件列表
-        files = self.workspace.get_file_list(self.project_id)
-        if files:
-            context_parts.append(f"项目文件:\n" + "\n".join(f"- {f}" for f in files[:20]))
-            if len(files) > 20:
-                context_parts.append(f"... 等 {len(files)} 个文件")
-        else:
-            context_parts.append("项目文件: (空项目)")
-        
-        return "\n\n".join(context_parts)
     
-    def _get_relevant_context(self, step: PlanStep) -> str:
+    def _build_context_for_llm(self, include_conversation: bool = False, 
+                                include_code_content: bool = True) -> str:
         """
-        获取与步骤相关的代码上下文
+        构建发送给 LLM 的上下文摘要（统一方法，Direct 和 Plan 模式共用）
         
-        优先级：
-        1. 活跃文件（已读取/修改过的文件，避免重复 read_file）
-        2. RAG 语义搜索
-        3. 回退：读取最近的文件
+        所有格式化文本都从 YAML 模板加载，代码只负责数据填充。
+        
+        Args:
+            include_conversation: 是否包含对话历史（通常通过 messages 单独添加）
+            include_code_content: 是否包含代码文件完整内容（Plan 模式需要，Direct 模式可选）
+        
+        Returns:
+            格式化的上下文字符串
         """
-        context_parts = []
+        prompt_loader = get_code_agent_prompt_loader()
+        parts = []
         
-        # 1. 首先添加活跃文件内容（LLM 已经交互过的文件）
-        active_files_context = self.code_context.to_context_string()
-        if active_files_context:
-            context_parts.append(active_files_context)
-            logging.info(f"Context: Using {len(self.code_context.focused_files)} active files")
-            # 如果已有足够的活跃文件，可能不需要额外搜索
-            if len(self.code_context.focused_files) >= 3:
-                return "\n\n".join(context_parts)
+        # 1. 记忆上下文（历史决策）- 高优先级
+        if self.context.memory and self.context.memory.decisions:
+            recent_decisions = self.context.memory.decisions[-5:]  # 最近 5 条
+            if recent_decisions:
+                decisions_list = "\n".join(f"- **{d.decision}**: {d.reason}" for d in recent_decisions)
+                template = prompt_loader.get_context_history_decisions()
+                parts.append(template.format(decisions_list=decisions_list))
+                parts.append("")  # 空行分隔
         
-        # 2. 尝试使用 RAG 语义搜索获取额外相关文件
-        semantic_tool = self.tool_registry.get("semantic_search")
-        if semantic_tool:
-            try:
-                # 使用步骤描述作为查询
-                result = semantic_tool.execute(
-                    query=step.description,
-                    top_k=3
-                )
-                if result.success and result.data and result.data.get("count", 0) > 0:
-                    context_parts.append(f"## 语义搜索相关代码\n{result.output}")
-                    return "\n\n".join(context_parts)
-            except Exception as e:
-                logging.warning(f"Semantic search failed, falling back: {e}")
+        # 2. 项目规范
+        if self.context.memory and self.context.memory.project_conventions:
+            recent_conventions = self.context.memory.project_conventions[-5:]  # 最近 5 条
+            if recent_conventions:
+                conventions_list = "\n".join(f"- {conv}" for conv in recent_conventions)
+                template = prompt_loader.get_context_project_conventions()
+                parts.append(template.format(conventions_list=conventions_list))
+                parts.append("")
         
-        # 3. 回退：如果没有活跃文件，读取项目文件
-        if not active_files_context:
-            files = self.workspace.get_file_list(self.project_id)
-            for f in files[:3]:  # 最多3个文件
-                if f.endswith('.py'):
-                    content = self.workspace.read_file(self.project_id, f)
-                    if content and len(content) < 2000:
-                        context_parts.append(f"### {f}\n```python\n{content}\n```")
+        # 3. 活跃文件列表（所有模式都需要）
+        if self.context.code_context and self.context.code_context.focused_files:
+            files = [f.path for f in self.context.code_context.focused_files]
+            editing_count = sum(1 for f in self.context.code_context.focused_files if f.is_editing)
+            
+            # 构建文件列表（只提取数据，不包含提示文本）
+            file_list = "\n".join(f"- {path}" for path in files[:15])  # 最多显示 15 个
+            
+            # 使用 YAML 模板格式化编辑信息和更多文件信息（不硬编码文本）
+            editing_info = ""
+            if editing_count > 0:
+                editing_template = prompt_loader.get_context_editing_info()
+                editing_info = editing_template.format(editing_count=editing_count) + "\n"
+            
+            more_files_info = ""
+            if len(files) > 15:
+                more_files_template = prompt_loader.get_context_more_files_info()
+                more_files_info = more_files_template.format(more_files_count=len(files) - 15)
+            
+            template = prompt_loader.get_context_active_files()
+            parts.append(template.format(
+                file_count=len(files),
+                editing_info=editing_info,
+                file_list=file_list,
+                more_files_info=more_files_info
+            ))
+            parts.append("")
         
-        return "\n\n".join(context_parts) if context_parts else ""
+        # 4. 符号索引（Repo Map）- 帮助快速了解项目结构
+        if (self.context.code_context and 
+            self.context.code_context.symbol_index and
+            self.context.code_context.symbol_index.file_symbols):
+            repo_map = self.context.code_context.symbol_index.to_repo_map_string(max_files=20)
+            if repo_map:
+                template = prompt_loader.get_context_repo_map()
+                parts.append(template.format(repo_map_content=repo_map))
+                parts.append("")
+        
+        # 5. 代码文件完整内容（Plan 模式需要，Direct 模式可选）
+        if include_code_content and self.context.code_context:
+            active_files_context = self.context.code_context.to_context_string()
+            if active_files_context:
+                template = prompt_loader.get_context_file_content()
+                parts.append(template.format(file_content=active_files_context))
+                logging.info(f"Context: Including {len(self.context.code_context.focused_files)} active files content")
+        
+        return "\n".join(parts) if parts else ""
     
     def _format_tools_description(self) -> str:
         """格式化工具描述"""
@@ -874,15 +1078,3 @@ class PlanExecuteAgent:
             return int(timeout[:-1]) * 3600
         else:
             return int(timeout)
-    
-    def get_status(self) -> Dict[str, Any]:
-        """获取当前状态"""
-        return {
-            "project_id": self.project_id,
-            "project_name": self.project_name,
-            "has_plan": self.current_plan is not None,
-            "plan_status": self.current_plan.status.value if self.current_plan else None,
-            "progress": self.current_plan.get_progress() if self.current_plan else None,
-            "tracker_summary": self.tracker.get_progress_summary(),
-            "is_executing": self._executing,
-        }

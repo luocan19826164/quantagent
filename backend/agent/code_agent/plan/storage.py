@@ -242,7 +242,7 @@ class PlanStorage:
         if not plan:
             return False
         
-        return plan.status in (PlanStatus.EXECUTING, PlanStatus.AWAITING_APPROVAL)
+        return plan.status in (PlanStatus.EXECUTING, PlanStatus.PLANNING)
     
     def clear_current(self) -> bool:
         """清除当前计划"""

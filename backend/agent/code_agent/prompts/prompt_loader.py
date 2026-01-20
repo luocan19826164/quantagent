@@ -51,6 +51,15 @@ class CodeAgentPromptLoader:
         """
         return self.config.get('system_prompt', '')
     
+    def get_mode_guidance(self) -> str:
+        """
+        获取执行模式选择指导
+        
+        Returns:
+            模式选择指导提示词
+        """
+        return self.config.get('mode_guidance', '')
+    
     def get_greeting(self) -> str:
         """
         获取问候语
@@ -82,6 +91,62 @@ class CodeAgentPromptLoader:
         """
         templates = self.config.get('code_templates', {})
         return list(templates.keys())
+    
+    # ==================== Plan 模式步骤执行模板 ====================
+    
+    def get_step_user_message(self) -> str:
+        """获取步骤执行的用户消息模板"""
+        return self.config.get('step_user_message', '')
+    
+    def get_step_system_message(self) -> str:
+        """获取步骤执行的系统消息主模板"""
+        return self.config.get('step_system_message', '')
+    
+    def get_project_context(self) -> str:
+        """获取项目上下文模板"""
+        return self.config.get('project_context', '')
+    
+    def get_active_files_warning(self) -> str:
+        """获取活跃文件警告模板"""
+        return self.config.get('active_files_warning', '')
+    
+    def get_code_context(self) -> str:
+        """获取代码上下文模板"""
+        return self.config.get('code_context', '')
+    
+    def get_correction_prompt(self) -> str:
+        """获取异常修正提示模板"""
+        return self.config.get('correction_prompt', '')
+    
+    # ==================== 上下文格式化模板 ====================
+    
+    def get_context_history_decisions(self) -> str:
+        """获取历史决策上下文模板"""
+        return self.config.get('context_history_decisions', '')
+    
+    def get_context_project_conventions(self) -> str:
+        """获取项目规范上下文模板"""
+        return self.config.get('context_project_conventions', '')
+    
+    def get_context_active_files(self) -> str:
+        """获取活跃文件列表上下文模板"""
+        return self.config.get('context_active_files', '')
+    
+    def get_context_repo_map(self) -> str:
+        """获取代码结构（Repo Map）上下文模板"""
+        return self.config.get('context_repo_map', '')
+    
+    def get_context_file_content(self) -> str:
+        """获取活跃文件内容上下文模板"""
+        return self.config.get('context_file_content', '')
+    
+    def get_context_editing_info(self) -> str:
+        """获取活跃文件编辑信息子模板"""
+        return self.config.get('context_editing_info', '')
+    
+    def get_context_more_files_info(self) -> str:
+        """获取活跃文件更多文件信息子模板"""
+        return self.config.get('context_more_files_info', '')
 
 
 # 单例模式，避免重复加载配置文件

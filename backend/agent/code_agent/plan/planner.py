@@ -133,7 +133,7 @@ class Planner:
             plan = Plan(
                 task=task,
                 steps=steps,
-                status=PlanStatus.AWAITING_APPROVAL
+                status=PlanStatus.PLANNING
             )
             
             logging.info(f"Planner: Created plan with {len(steps)} steps")
@@ -151,7 +151,7 @@ class Planner:
                         expected_outcome="任务完成"
                     )
                 ],
-                status=PlanStatus.AWAITING_APPROVAL
+                status=PlanStatus.PLANNING
             )
     
     def create_plan_sync(self, task: str, context: str = "") -> Plan:
@@ -185,7 +185,7 @@ class Planner:
             plan = Plan(
                 task=task,
                 steps=steps,
-                status=PlanStatus.AWAITING_APPROVAL
+                status=PlanStatus.PLANNING
             )
             
             logging.info(f"Planner: Created plan with {len(steps)} steps")
@@ -202,7 +202,7 @@ class Planner:
                         expected_outcome="任务完成"
                     )
                 ],
-                status=PlanStatus.AWAITING_APPROVAL
+                status=PlanStatus.PLANNING
             )
     
     async def replan(self, original_task: str, failed_plan: Plan, 
