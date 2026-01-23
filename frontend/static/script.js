@@ -14,6 +14,11 @@ let codeAgentIsEditing = false;
 let codeAgentExecutingTaskId = null;
 let codeAgentExecutionStartTime = null;
 let codeAgentTimer = null;
+// 消息缓存：按项目存储对话历史
+let codeAgentMessagesCache = {}; // { projectId: [messages...] }
+const MAX_MESSAGES_PER_PROJECT = 200; // 每个项目最多缓存的消息数
+// 正在进行的 SSE 流引用（用于切换项目时保持连接）
+let codeAgentActiveStream = null; // { botDiv: Element, projectId: string, fullResponse: string }
 
 // 页面加载完成后初始化
 // 页面加载完成后初始化
@@ -23,7 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (modelSelector) {
         modelSelector.value = currentModel;
     }
-    
+
     initSession();
     // loadModels(); // Assuming this function is defined elsewhere or will be added
 
@@ -525,6 +530,10 @@ function switchAgent(mode) {
         // 隐藏侧边栏，进入全屏模式
         if (appWrapper) appWrapper.classList.add('fullscreen-mode');
         loadCodeAgentProjects();
+        // 如果有当前项目，恢复消息
+        if (codeAgentCurrentProject) {
+            restoreCodeAgentMessages(codeAgentCurrentProject);
+        }
     }
 }
 
@@ -855,15 +864,15 @@ let currentRuleId = null;
 // 显示规则详情
 async function showRuleDetail(ruleId) {
     currentRuleId = ruleId;
-    
+
     // 切换视图
     document.getElementById('executorView').style.display = 'none';
     document.getElementById('collectorView').style.display = 'none';
     document.getElementById('ruleDetailView').style.display = 'block';
-    
+
     // 更新标题
     document.querySelector('.header h1').innerText = '📋 规则详情';
-    
+
     // 加载规则详情
     await loadRuleDetail(ruleId);
 }
@@ -874,7 +883,7 @@ function backToExecutor() {
     document.getElementById('ruleDetailView').style.display = 'none';
     document.getElementById('executorView').style.display = 'grid';
     document.querySelector('.header h1').innerText = '⚡ 量化规则执行 Agent';
-    
+
     // 刷新规则列表
     loadExecutionRules();
 }
@@ -883,14 +892,14 @@ function backToExecutor() {
 async function loadRuleDetail(ruleId) {
     const infoContent = document.getElementById('ruleInfoContent');
     const ordersBody = document.getElementById('ruleOrdersTableBody');
-    
+
     infoContent.innerHTML = '<div class="loading">加载中...</div>';
     ordersBody.innerHTML = '<tr><td colspan="8" class="loading">加载中...</td></tr>';
-    
+
     try {
         const response = await fetch(`/api/rules/${ruleId}/detail`);
         const data = await response.json();
-        
+
         if (data.success) {
             renderRuleInfo(data.rule);
             renderRuleOrders(data.orders);
@@ -909,19 +918,19 @@ function renderRuleInfo(rule) {
     const infoContent = document.getElementById('ruleInfoContent');
     const statusBadge = document.getElementById('ruleStatusBadge');
     const titleElement = document.getElementById('ruleDetailTitle');
-    
+
     const req = rule.content.user_requirements || {};
     const runtimeStatus = rule.content.runtime_status || {};
     const isRunning = rule.status === 'running';
-    
+
     // 更新标题和状态
     titleElement.textContent = `📋 ${rule.name || '规则 #' + rule.id}`;
     statusBadge.className = `exec-status-badge ${isRunning ? 'exec-status-running' : 'exec-status-stopped'}`;
     statusBadge.textContent = isRunning ? '运行中' : '已停止';
-    
+
     // 产品类型映射
     const productMap = { "spot": "现货", "contract": "合约", "futures": "期货", "options": "期权" };
-    
+
     // 构建紧凑型信息网格
     let html = `
         <!-- 第一行：5个字段 -->
@@ -978,7 +987,7 @@ function renderRuleInfo(rule) {
             </div>
         </div>
     `;
-    
+
     // 执行计划（如果有）
     if (req.execute_plan) {
         html += `
@@ -990,7 +999,7 @@ function renderRuleInfo(rule) {
         </div>
         `;
     }
-    
+
     // 运行时状态（如果有）
     if (Object.keys(runtimeStatus).length > 0) {
         html += `
@@ -1002,19 +1011,19 @@ function renderRuleInfo(rule) {
         </div>
         `;
     }
-    
+
     infoContent.innerHTML = html;
 }
 
 // 渲染规则相关订单
 function renderRuleOrders(orders) {
     const tableBody = document.getElementById('ruleOrdersTableBody');
-    
+
     if (!orders || orders.length === 0) {
         tableBody.innerHTML = '<tr><td colspan="8" class="no-data">暂无订单数据</td></tr>';
         return;
     }
-    
+
     tableBody.innerHTML = orders.map(order => `
         <tr>
             <td>${order.order_id || order.id}</td>
@@ -1038,7 +1047,7 @@ async function loadCodeAgentProjects() {
     try {
         const response = await fetch('/api/code-agent/projects');
         const data = await response.json();
-        
+
         if (data.success) {
             renderCodeAgentProjects(data.projects);
         } else {
@@ -1053,13 +1062,13 @@ async function loadCodeAgentProjects() {
 function renderCodeAgentProjects(projects) {
     const selector = document.getElementById('projectSelector');
     if (!selector) return;
-    
+
     let options = '<option value="">选择项目...</option>';
     projects.forEach(project => {
         options += `<option value="${project.id}">${project.name}</option>`;
     });
     selector.innerHTML = options;
-    
+
     // 如果当前有选中的项目，保持选中
     if (codeAgentCurrentProject) {
         selector.value = codeAgentCurrentProject;
@@ -1070,21 +1079,22 @@ function renderCodeAgentProjects(projects) {
 async function createCodeAgentProject() {
     const name = prompt('请输入项目名称:', '新量化项目');
     if (!name) return;
-    
+
     try {
         const response = await fetch('/api/code-agent/projects', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: name })
         });
-        
+
         const data = await response.json();
         if (data.success) {
             codeAgentCurrentProject = data.project.id;
             await loadCodeAgentProjects();
             document.getElementById('projectSelector').value = codeAgentCurrentProject;
             await loadCodeAgentFiles();
-            clearCodeAgentChat();
+            // 新项目没有历史消息，显示默认消息
+            restoreCodeAgentMessages(codeAgentCurrentProject);
         } else {
             alert('创建失败: ' + data.error);
         }
@@ -1095,17 +1105,46 @@ async function createCodeAgentProject() {
 
 // 选择项目
 async function selectCodeAgentProject(projectId) {
+    console.log('selectCodeAgentProject:', projectId, 'current:', codeAgentCurrentProject);
+    
     if (!projectId) {
+        // 保存当前项目消息（如果有）
+        if (codeAgentCurrentProject) {
+            saveCodeAgentMessages(codeAgentCurrentProject);
+        }
+        
         codeAgentCurrentProject = null;
         codeAgentFiles = [];
         renderCodeAgentFileTree([]);
         clearCodeAgentEditor();
+        // 清除流引用（如果切换到了空项目）
+        codeAgentActiveStream = null;
         return;
     }
-    
+
+    // 保存当前项目消息（如果有，且切换到不同项目）
+    if (codeAgentCurrentProject && codeAgentCurrentProject !== projectId) {
+        console.log('Switching from project', codeAgentCurrentProject, 'to', projectId);
+        // 先保存当前项目的消息（从DOM读取，但只保存当前项目的）
+        saveCodeAgentMessages(codeAgentCurrentProject);
+        
+        // 注意：不清除流引用，即使切换到不同项目
+        // 因为后端流还在继续，用户可能想看到结果
+        // 流会在完成后自动清除，或者在恢复消息时重新关联
+        if (codeAgentActiveStream && codeAgentActiveStream.projectId !== projectId) {
+            console.log('Stream is for old project, but keeping reference for now');
+        }
+    }
+
+    // 切换到新项目
     codeAgentCurrentProject = projectId;
     await loadCodeAgentFiles();
-    clearCodeAgentChat();
+    
+    // 恢复新项目的消息
+    // restoreCodeAgentMessages 会检查流是否是当前项目的
+    // 如果是，不清空DOM；如果不是，清空DOM后恢复
+    console.log('Restoring messages for project', projectId, 'cache:', codeAgentMessagesCache[projectId]?.length || 0);
+    restoreCodeAgentMessages(projectId);
 }
 
 // 删除项目
@@ -1114,16 +1153,16 @@ async function deleteCodeAgentProject() {
         alert('请先选择一个项目');
         return;
     }
-    
+
     if (!confirm('确定要删除这个项目吗？所有文件将被删除。')) {
         return;
     }
-    
+
     try {
         const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}`, {
             method: 'DELETE'
         });
-        
+
         const data = await response.json();
         if (data.success) {
             codeAgentCurrentProject = null;
@@ -1142,11 +1181,11 @@ async function deleteCodeAgentProject() {
 // 加载项目文件
 async function loadCodeAgentFiles() {
     if (!codeAgentCurrentProject) return;
-    
+
     try {
         const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/files`);
         const data = await response.json();
-        
+
         if (data.success) {
             codeAgentFiles = data.files;
             renderCodeAgentFileTree(data.files);
@@ -1158,43 +1197,92 @@ async function loadCodeAgentFiles() {
     }
 }
 
-// 渲染文件树
+// 渲染文件树（支持嵌套结构）
 function renderCodeAgentFileTree(files) {
     const container = document.getElementById('fileTree');
     if (!container) return;
-    
+
     if (files.length === 0) {
         container.innerHTML = '<div class="file-tree-placeholder">暂无文件，开始对话生成代码</div>';
         return;
     }
-    
-    // 按路径排序
-    files.sort((a, b) => a.path.localeCompare(b.path));
-    
+
+    // 递归渲染树节点
+    function renderNode(node, level = 0) {
+        // node.path 已经是完整的相对路径（如 "dir1/file1.py"）
+        const filePath = node.path || node.name;
+        const isDir = node.type === 'directory' || node.type === 'dir' || (node.children && node.children.length > 0);
+        const icon = isDir ? '📁' : '📄';
+        const selectedClass = (codeAgentCurrentFile === filePath) ? 'selected' : '';
+        const typeClass = isDir ? 'dir' : '';
+        const hasChildren = isDir && node.children && node.children.length > 0;
+        const indent = level * 20; // 每级缩进 20px
+        
+        let html = `<div class="file-tree-item ${typeClass} ${selectedClass}" 
+                     style="padding-left: ${indent + 16}px;"
+                     data-path="${filePath}"
+                     data-level="${level}">`;
+        
+        // 目录展开/折叠按钮
+        if (isDir && hasChildren) {
+            html += `<span class="tree-toggle" onclick="toggleTreeNode(event, this)" data-expanded="true">▼</span>`;
+        } else if (isDir) {
+            html += `<span class="tree-toggle tree-toggle-empty"></span>`;
+        } else {
+            html += `<span class="tree-toggle"></span>`;
+        }
+        
+        // 文件图标和名称
+        html += `<span class="file-icon">${icon}</span>`;
+        html += `<span class="file-name" ${!isDir ? `onclick="selectCodeAgentFile('${filePath}')"` : ''}>${node.name}</span>`;
+        html += `</div>`;
+        
+        // 递归渲染子节点
+        if (hasChildren) {
+            html += `<div class="tree-children" data-parent="${filePath}">`;
+            node.children.forEach(child => {
+                html += renderNode(child, level + 1);
+            });
+            html += `</div>`;
+        }
+        
+        return html;
+    }
+
     let html = '';
     files.forEach(file => {
-        const icon = file.type === 'directory' ? '📁' : '📄';
-        const indent = (file.path.split('/').length - 1);
-        const selectedClass = (codeAgentCurrentFile === file.path) ? 'selected' : '';
-        const typeClass = file.type === 'directory' ? 'dir' : '';
-        
-        html += `<div class="file-tree-item ${typeClass} ${selectedClass} indent-${indent}" 
-                     onclick="selectCodeAgentFile('${file.path}')" 
-                     data-path="${file.path}">
-            <span class="file-icon">${icon}</span>
-            <span class="file-name">${file.name}</span>
-        </div>`;
+        html += renderNode(file, 0);
     });
-    
+
     container.innerHTML = html;
+}
+
+// 切换树节点展开/折叠
+function toggleTreeNode(event, toggleBtn) {
+    event.stopPropagation();
+    const item = toggleBtn.closest('.file-tree-item');
+    const children = item.nextElementSibling;
+    
+    if (children && children.classList.contains('tree-children')) {
+        const isExpanded = toggleBtn.getAttribute('data-expanded') === 'true';
+        if (isExpanded) {
+            children.style.display = 'none';
+            toggleBtn.textContent = '▶';
+            toggleBtn.setAttribute('data-expanded', 'false');
+        } else {
+            children.style.display = 'block';
+            toggleBtn.textContent = '▼';
+            toggleBtn.setAttribute('data-expanded', 'true');
+        }
+    }
 }
 
 // 选择文件
 async function selectCodeAgentFile(filePath) {
     if (!codeAgentCurrentProject) return;
-    
+
     codeAgentCurrentFile = filePath;
-    
+
     // 更新文件树选中状态
     document.querySelectorAll('.file-tree-item').forEach(item => {
         item.classList.remove('selected');
@@ -1202,12 +1290,12 @@ async function selectCodeAgentFile(filePath) {
             item.classList.add('selected');
         }
     });
-    
+
     // 加载文件内容
     try {
         const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/files/${encodeURIComponent(filePath)}`);
         const data = await response.json();
-        
+
         if (data.success) {
             displayCodeAgentFile(filePath, data.content);
         } else {
@@ -1223,9 +1311,9 @@ function displayCodeAgentFile(filePath, content) {
     const fileName = document.getElementById('currentFileName');
     const codeDisplay = document.getElementById('codeDisplay');
     const codeTextarea = document.getElementById('codeTextarea');
-    
+
     if (fileName) fileName.textContent = filePath;
-    
+
     // 确定语言类型
     const ext = filePath.split('.').pop().toLowerCase();
     const langMap = {
@@ -1238,7 +1326,7 @@ function displayCodeAgentFile(filePath, content) {
         'txt': 'plaintext'
     };
     const language = langMap[ext] || 'plaintext';
-    
+
     if (codeDisplay) {
         codeDisplay.className = `code-display language-${language}`;
         codeDisplay.textContent = content;
@@ -1247,11 +1335,11 @@ function displayCodeAgentFile(filePath, content) {
             Prism.highlightElement(codeDisplay);
         }
     }
-    
+
     if (codeTextarea) {
         codeTextarea.value = content;
     }
-    
+
     // 默认显示高亮视图
     exitCodeAgentEditMode();
 }
@@ -1259,13 +1347,13 @@ function displayCodeAgentFile(filePath, content) {
 // 进入编辑模式
 function enterCodeAgentEditMode() {
     codeAgentIsEditing = true;
-    
+
     const codeDisplay = document.getElementById('codeDisplay');
     const codeTextarea = document.getElementById('codeTextarea');
     const editBtn = document.getElementById('editFileBtn');
     const saveBtn = document.getElementById('saveFileBtn');
     const cancelBtn = document.getElementById('cancelEditBtn');
-    
+
     if (codeDisplay) codeDisplay.style.display = 'none';
     if (codeTextarea) codeTextarea.style.display = 'block';
     if (editBtn) editBtn.style.display = 'none';
@@ -1276,13 +1364,13 @@ function enterCodeAgentEditMode() {
 // 退出编辑模式
 function exitCodeAgentEditMode() {
     codeAgentIsEditing = false;
-    
+
     const codeDisplay = document.getElementById('codeDisplay');
     const codeTextarea = document.getElementById('codeTextarea');
     const editBtn = document.getElementById('editFileBtn');
     const saveBtn = document.getElementById('saveFileBtn');
     const cancelBtn = document.getElementById('cancelEditBtn');
-    
+
     if (codeDisplay) codeDisplay.style.display = 'block';
     if (codeTextarea) codeTextarea.style.display = 'none';
     if (editBtn) editBtn.style.display = 'inline-block';
@@ -1293,17 +1381,17 @@ function exitCodeAgentEditMode() {
 // 保存文件
 async function saveCodeAgentFile() {
     if (!codeAgentCurrentProject || !codeAgentCurrentFile) return;
-    
+
     const textarea = document.getElementById('codeTextarea');
     if (!textarea) return;
-    
+
     try {
         const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/files/${encodeURIComponent(codeAgentCurrentFile)}`, {
             method: 'PUT',  // 使用 PUT 方法
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content: textarea.value })
         });
-        
+
         const data = await response.json();
         if (data.success) {
             // 更新高亮显示
@@ -1330,22 +1418,149 @@ function clearCodeAgentEditor() {
     const fileName = document.getElementById('currentFileName');
     const codeDisplay = document.getElementById('codeDisplay');
     const codeTextarea = document.getElementById('codeTextarea');
-    
+
     if (fileName) fileName.textContent = '未选择文件';
     if (codeDisplay) {
         codeDisplay.className = 'code-display';
         codeDisplay.textContent = '';
     }
     if (codeTextarea) codeTextarea.value = '';
-    
+
     exitCodeAgentEditMode();
 }
 
-// 清空聊天记录
+// 保存当前项目消息到缓存
+function saveCodeAgentMessages(projectId) {
+    if (!projectId) return;
+    
+    const container = document.getElementById('codeAgentMessages');
+    if (!container) return;
+    
+    // 从DOM读取消息（但只保存当前项目的）
+    // 如果缓存中已有该项目的消息，先合并（避免丢失）
+    const existingCache = codeAgentMessagesCache[projectId] || [];
+    const domMessages = [];
+    
+    container.querySelectorAll('.user-message, .bot-message').forEach(msg => {
+        domMessages.push({
+            type: msg.classList.contains('user-message') ? 'user' : 'bot',
+            content: msg.innerHTML,
+            timestamp: new Date().toISOString()
+        });
+    });
+    
+    // 合并缓存和DOM消息（去重，优先使用DOM中的最新消息）
+    // 如果DOM中有消息，使用DOM的；否则使用缓存的
+    const messages = domMessages.length > 0 ? domMessages : existingCache;
+    
+    // 限制消息数量
+    if (messages.length > MAX_MESSAGES_PER_PROJECT) {
+        messages.splice(0, messages.length - MAX_MESSAGES_PER_PROJECT);
+    }
+    
+    codeAgentMessagesCache[projectId] = messages;
+}
+
+// 从缓存恢复消息
+function restoreCodeAgentMessages(projectId) {
+    const container = document.getElementById('codeAgentMessages');
+    if (!container) {
+        console.error('codeAgentMessages container not found in restoreCodeAgentMessages');
+        return;
+    }
+    
+    // 检查是否有正在进行的流，且流是针对当前项目的
+    const hasActiveStreamForCurrentProject = codeAgentActiveStream && 
+                                              codeAgentActiveStream.projectId === projectId;
+    
+    console.log('restoreCodeAgentMessages:', {
+        projectId,
+        hasStream: !!codeAgentActiveStream,
+        streamProjectId: codeAgentActiveStream?.projectId,
+        hasActiveStreamForCurrentProject,
+        cacheLength: codeAgentMessagesCache[projectId]?.length || 0
+    });
+    
+    // 如果没有缓存，显示默认消息
+    if (!projectId || !codeAgentMessagesCache[projectId] || codeAgentMessagesCache[projectId].length === 0) {
+        console.log('No cache for project', projectId, '- showing default message');
+        // 如果有正在进行的流（当前项目的），不清空DOM（保留流式消息）
+        if (!hasActiveStreamForCurrentProject) {
+            container.innerHTML = '<div class="bot-message">你好！我是量化代码 Agent，可以帮你生成 Python 量化程序。请描述你想要实现的功能。</div>';
+        }
+        return;
+    }
+    
+    // 如果有正在进行的流，且流是针对当前项目的，不清空 DOM，只追加新消息
+    // 这样可以保证流式消息继续显示
+    if (hasActiveStreamForCurrentProject) {
+        console.log('Has active stream for current project - appending messages');
+        // 检查缓存中的消息是否已经在 DOM 中
+        const existingMessages = Array.from(container.querySelectorAll('.user-message, .bot-message'));
+        const cachedMessages = codeAgentMessagesCache[projectId];
+        
+        // 只追加缓存中但不在 DOM 中的消息
+        if (cachedMessages) {
+            cachedMessages.forEach((msg, index) => {
+                if (index >= existingMessages.length) {
+                    const div = document.createElement('div');
+                    div.className = msg.type === 'user' ? 'user-message' : 'bot-message';
+                    div.innerHTML = msg.content;
+                    container.appendChild(div);
+                }
+            });
+        }
+        
+        // 检查流引用的 botDiv 是否还在 DOM 中
+        if (codeAgentActiveStream && codeAgentActiveStream.botDiv) {
+            if (!container.contains(codeAgentActiveStream.botDiv)) {
+                console.log('botDiv not in DOM, recreating from stream');
+                // botDiv 不在 DOM 中，重新创建并追加
+                const newBotDiv = document.createElement('div');
+                newBotDiv.className = 'bot-message';
+                newBotDiv.innerHTML = formatCodeAgentMessage(codeAgentActiveStream.fullResponse || '');
+                container.appendChild(newBotDiv);
+                codeAgentActiveStream.botDiv = newBotDiv;
+            }
+        }
+    } else {
+        // 没有正在进行的流，或者流是其他项目的，正常恢复（清空后恢复）
+        console.log('No active stream - clearing and restoring', codeAgentMessagesCache[projectId].length, 'messages');
+        container.innerHTML = '';
+        codeAgentMessagesCache[projectId].forEach(msg => {
+            const div = document.createElement('div');
+            div.className = msg.type === 'user' ? 'user-message' : 'bot-message';
+            div.innerHTML = msg.content;
+            container.appendChild(div);
+        });
+        
+        // 如果流是其他项目的，但流还在进行中，尝试恢复 botDiv
+        if (codeAgentActiveStream && codeAgentActiveStream.projectId !== projectId) {
+            console.log('Stream is for different project, but keeping it active');
+            // 在恢复的消息后追加一个空的 botDiv，用于接收流式消息
+            const botDiv = document.createElement('div');
+            botDiv.className = 'bot-message';
+            botDiv.innerHTML = formatCodeAgentMessage(codeAgentActiveStream.fullResponse || '');
+            container.appendChild(botDiv);
+            codeAgentActiveStream.botDiv = botDiv;
+            // 更新流引用的项目ID（因为用户切换回来了）
+            codeAgentActiveStream.projectId = projectId;
+        }
+    }
+    
+    // 滚动到底部
+    scrollToBottom(container);
+}
+
+// 清空聊天记录（保留，但不再在切换项目时调用）
 function clearCodeAgentChat() {
     const container = document.getElementById('codeAgentMessages');
     if (container) {
         container.innerHTML = '<div class="bot-message">你好！我是量化代码 Agent，可以帮你生成 Python 量化程序。请描述你想要实现的功能。</div>';
+    }
+    // 同时清空缓存
+    if (codeAgentCurrentProject) {
+        codeAgentMessagesCache[codeAgentCurrentProject] = [];
     }
 }
 
@@ -1354,57 +1569,88 @@ async function sendCodeAgentMessage() {
     const input = document.getElementById('codeAgentInput');
     const sendBtn = document.getElementById('codeAgentSendBtn');
     const message = input.value.trim();
-    
+
     if (!message) return;
-    
+
     if (!codeAgentCurrentProject) {
         alert('请先选择或创建一个项目');
         return;
     }
-    
+
+    console.log('sendCodeAgentMessage:', {
+        project: codeAgentCurrentProject,
+        message: message.substring(0, 50) + '...'
+    });
+
     // 显示用户消息
-    appendCodeAgentMessage('user', message);
+    const userDiv = appendCodeAgentMessage('user', message);
+    if (!userDiv) {
+        console.error('Failed to append user message');
+        return;
+    }
+    
     input.value = '';
     input.disabled = true;
     sendBtn.disabled = true;
-    
+
     // 创建 bot 消息容器
     const botDiv = appendCodeAgentMessage('bot', '');
+    if (!botDiv) {
+        console.error('Failed to append bot message');
+        input.disabled = false;
+        sendBtn.disabled = false;
+        return;
+    }
+    
     let fullResponse = '';
     let codeChanges = [];
     
+    // 记录正在进行的流
+    codeAgentActiveStream = {
+        botDiv: botDiv,
+        projectId: codeAgentCurrentProject,
+        fullResponse: fullResponse
+    };
+    
+    console.log('Stream started for project', codeAgentCurrentProject);
+
     try {
         const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: message })
         });
-        
+
         if (!response.ok) {
             const error = await response.json();
-            botDiv.innerHTML = formatCodeAgentMessage('错误: ' + (error.error || '未知错误'));
+            const errorMsg = '错误: ' + (error.error || '未知错误');
+            botDiv.innerHTML = formatCodeAgentMessage(errorMsg);
+            // 更新缓存中的 bot 消息
+            updateBotMessageInCache(botDiv, errorMsg);
+            // 清除流引用
+            codeAgentActiveStream = null;
             return;
         }
-        
+
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        
+
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            
+
             buffer += decoder.decode(value, { stream: true });
-            
+
             // 处理 SSE 事件
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
-            
+
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
                     try {
                         const data = JSON.parse(line.slice(6));
-                        
+
                         // 处理新的事件类型
                         if (data.type === 'status') {
                             // 状态消息
@@ -1444,7 +1690,7 @@ async function sendCodeAgentMessage() {
                             }
                             fullResponse += '\n';
                             botDiv.innerHTML = formatCodeAgentMessage(fullResponse) + '<span class="typing-cursor"></span>';
-                            
+
                             // 如果是文件写入操作，实时刷新文件列表
                             if (data.success && ['write_file', 'patch_file', 'delete_file'].includes(data.tool)) {
                                 loadCodeAgentFiles();
@@ -1480,56 +1726,123 @@ async function sendCodeAgentMessage() {
                         } else if (data.type === 'done') {
                             // 完成，移除光标
                             botDiv.innerHTML = formatCodeAgentMessage(fullResponse);
+                            // 更新缓存中的 bot 消息
+                            updateBotMessageInCache(botDiv, fullResponse);
+                            // 更新流引用
+                            if (codeAgentActiveStream) {
+                                codeAgentActiveStream.fullResponse = fullResponse;
+                            }
                         } else if (data.type === 'error') {
                             botDiv.innerHTML = formatCodeAgentMessage('错误: ' + data.error);
+                            // 更新缓存中的 bot 消息
+                            updateBotMessageInCache(botDiv, '错误: ' + data.error);
+                            // 更新流引用
+                            if (codeAgentActiveStream) {
+                                codeAgentActiveStream.fullResponse = '错误: ' + data.error;
+                            }
                         }
                         
-                        // 滚动到底部
-                        botDiv.parentElement.scrollTop = botDiv.parentElement.scrollHeight;
+                        // 更新流引用中的 fullResponse
+                        if (codeAgentActiveStream && codeAgentActiveStream.botDiv === botDiv) {
+                            codeAgentActiveStream.fullResponse = fullResponse;
+                        }
+
+                        // 滚动到底部 (多重保障)
+                        scrollToBottom(botDiv.parentElement);
+
                     } catch (e) {
                         console.error('Parse SSE error:', e, line);
                     }
                 }
             }
         }
-        
+
         // 显示代码变更
         if (codeChanges.length > 0) {
             displayCodeChanges(codeChanges);
         }
-        
+
         // 刷新文件列表
         await loadCodeAgentFiles();
-        
+
         // 如果有新文件，自动选择第一个
         if (codeChanges.length > 0 && !codeAgentCurrentFile) {
             selectCodeAgentFile(codeChanges[0].path);
         }
-        
+
     } catch (error) {
         botDiv.innerHTML = formatCodeAgentMessage('发送失败: ' + error.message);
+        // 更新缓存中的 bot 消息
+        updateBotMessageInCache(botDiv, '发送失败: ' + error.message);
+        // 更新流引用
+        if (codeAgentActiveStream) {
+            codeAgentActiveStream.fullResponse = '发送失败: ' + error.message;
+        }
     } finally {
+        // 清除流引用
+        codeAgentActiveStream = null;
         input.disabled = false;
         sendBtn.disabled = false;
         input.focus();
     }
 }
 
+// 更新缓存中的 bot 消息（用于流式消息）
+function updateBotMessageInCache(botDiv, content) {
+    if (!codeAgentCurrentProject || !codeAgentMessagesCache[codeAgentCurrentProject]) {
+        return;
+    }
+    
+    const messages = codeAgentMessagesCache[codeAgentCurrentProject];
+    // 找到最后一条 bot 消息（应该就是当前这条）
+    for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].type === 'bot') {
+            messages[i].content = formatCodeAgentMessage(content);
+            break;
+        }
+    }
+}
+
 // 追加聊天消息
 function appendCodeAgentMessage(type, message) {
     const container = document.getElementById('codeAgentMessages');
+    if (!container) {
+        console.error('codeAgentMessages container not found');
+        return null;
+    }
+    
     const div = document.createElement('div');
     div.className = type === 'user' ? 'user-message' : 'bot-message';
     div.innerHTML = formatCodeAgentMessage(message);
     container.appendChild(div);
-    container.scrollTop = container.scrollHeight;
+    scrollToBottom(container);
+    
+    // 保存到缓存
+    if (codeAgentCurrentProject) {
+        if (!codeAgentMessagesCache[codeAgentCurrentProject]) {
+            codeAgentMessagesCache[codeAgentCurrentProject] = [];
+        }
+        codeAgentMessagesCache[codeAgentCurrentProject].push({
+            type: type,
+            content: div.innerHTML,
+            timestamp: new Date().toISOString()
+        });
+        
+        // 限制消息数量
+        if (codeAgentMessagesCache[codeAgentCurrentProject].length > MAX_MESSAGES_PER_PROJECT) {
+            codeAgentMessagesCache[codeAgentCurrentProject].shift(); // 移除最早的消息
+        }
+    } else {
+        console.warn('appendCodeAgentMessage: codeAgentCurrentProject is null');
+    }
+    
     return div;
 }
 
 // 格式化代码 Agent 消息（支持 Markdown）
 function formatCodeAgentMessage(message) {
     if (!message) return '';
-    
+
     // 先处理代码块（避免内部内容被其他规则处理）
     const codeBlocks = [];
     let formatted = message.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
@@ -1537,42 +1850,60 @@ function formatCodeAgentMessage(message) {
         codeBlocks.push(`<pre><code class="language-${lang || 'plaintext'}">${escapeHtml(code)}</code></pre>`);
         return placeholder;
     });
-    
+
     // 转义 HTML（代码块已经单独处理）
     formatted = escapeHtml(formatted);
-    
+
     // 恢复代码块占位符
     codeBlocks.forEach((block, i) => {
         formatted = formatted.replace(`__CODE_BLOCK_${i}__`, block);
     });
-    
+
     // 处理标题 ## xxx
     formatted = formatted.replace(/^## (.+)$/gm, '<strong style="font-size: 1.1em;">$1</strong>');
     formatted = formatted.replace(/^### (.+)$/gm, '<strong>$1</strong>');
-    
+
     // 处理粗体 **text**
     formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    
+
     // 处理斜体 *text* （但不匹配 ** 粗体）
     formatted = formatted.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
-    
+
     // 处理行内代码 `code`
     formatted = formatted.replace(/`([^`]+)`/g, '<code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 3px;">$1</code>');
-    
+
     // 处理列表项 - item
     formatted = formatted.replace(/^- (.+)$/gm, '• $1');
-    
+
     // 处理换行
     formatted = formatted.replace(/\n/g, '<br>');
-    
+
     return formatted;
+}
+
+// 辅助：鲁棒的滚动到底部函数
+function scrollToBottom(container) {
+    if (!container) return;
+
+    // 立即尝试滚动
+    container.scrollTop = container.scrollHeight;
+
+    // 稍后再次滚动以确保渲染完成
+    requestAnimationFrame(() => {
+        container.scrollTop = container.scrollHeight;
+
+        // 双重保障，防止图片或复杂内容渲染延迟
+        setTimeout(() => {
+            container.scrollTop = container.scrollHeight;
+        }, 50);
+    });
 }
 
 // 显示代码变更
 function displayCodeChanges(changes) {
     const panel = document.getElementById('codePanelContent');
     if (!panel) return;
-    
+
     let html = '';
     changes.forEach(change => {
         html += `
@@ -1584,9 +1915,9 @@ function displayCodeChanges(changes) {
             </div>
         `;
     });
-    
+
     panel.innerHTML = html;
-    
+
     // Prism 高亮
     if (window.Prism) {
         panel.querySelectorAll('code').forEach(block => {
@@ -1599,7 +1930,7 @@ function displayCodeChanges(changes) {
 function toggleCodePanel() {
     const panel = document.querySelector('.code-panel-section');
     const btn = document.getElementById('togglePanelBtn');
-    
+
     if (panel) {
         panel.classList.toggle('collapsed');
         if (btn) {
@@ -1618,15 +1949,15 @@ async function runCodeAgentCode() {
         alert('请先选择要执行的文件');
         return;
     }
-    
+
     if (codeAgentExecutingTaskId) {
         alert('已有代码在执行中');
         return;
     }
-    
+
     const timeoutSelect = document.getElementById('executionTimeout');
     const timeout = timeoutSelect ? timeoutSelect.value : '300';
-    
+
     // 根据超时值转换格式
     let timeoutStr = '5min';
     const timeoutNum = parseInt(timeout);
@@ -1634,15 +1965,15 @@ async function runCodeAgentCode() {
     else if (timeoutNum === 300) timeoutStr = '5min';
     else if (timeoutNum === 1800) timeoutStr = '30min';
     else if (timeoutNum === 0) timeoutStr = 'unlimited';
-    
+
     codeAgentExecutingTaskId = 'running';
     codeAgentExecutionStartTime = Date.now();
     startExecutionTimer();
     updateExecutionStatus('running', '执行中...');
-    
+
     const outputContainer = document.getElementById('executionOutput');
     if (outputContainer) outputContainer.innerHTML = '';
-    
+
     try {
         const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/execute`, {
             method: 'POST',
@@ -1652,7 +1983,7 @@ async function runCodeAgentCode() {
                 timeout: timeoutStr
             })
         });
-        
+
         if (!response.ok) {
             const error = await response.json();
             updateExecutionStatus('error', error.error || '执行失败');
@@ -1660,21 +1991,21 @@ async function runCodeAgentCode() {
             stopExecutionTimer();
             return;
         }
-        
+
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        
+
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            
+
             buffer += decoder.decode(value, { stream: true });
-            
+
             // 处理 SSE 数据
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
-            
+
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
                     try {
@@ -1698,12 +2029,12 @@ async function runCodeAgentCode() {
 // 停止执行
 async function stopCodeAgentExecution() {
     if (!codeAgentExecutingTaskId || !codeAgentCurrentProject) return;
-    
+
     try {
         const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/stop`, {
             method: 'POST'
         });
-        
+
         const data = await response.json();
         if (data.success) {
             updateExecutionStatus('error', '已停止');
@@ -1719,7 +2050,7 @@ async function stopCodeAgentExecution() {
 function handleExecutionEvent(data) {
     const outputContainer = document.getElementById('executionOutput');
     if (!outputContainer) return;
-    
+
     if (data.type === 'stdout' || data.type === 'stderr') {
         const line = document.createElement('div');
         line.className = `output-line output-${data.type}`;
@@ -1729,7 +2060,7 @@ function handleExecutionEvent(data) {
     } else if (data.type === 'exit') {
         stopExecutionTimer();
         codeAgentExecutingTaskId = null;
-        
+
         if (data.exit_code === 0) {
             updateExecutionStatus('success', `完成 (${formatDuration(data.duration)})`);
         } else if (data.exit_code === -1) {
@@ -1749,12 +2080,12 @@ function updateExecutionStatus(status, message) {
     const statusDiv = document.getElementById('executionStatus');
     const runBtn = document.getElementById('runCodeBtn');
     const stopBtn = document.getElementById('stopCodeBtn');
-    
+
     if (statusDiv) {
         statusDiv.className = `execution-status ${status}`;
         statusDiv.innerHTML = `<span>${message}</span><span id="executionTimer"></span>`;
     }
-    
+
     if (status === 'running') {
         if (runBtn) runBtn.disabled = true;
         if (stopBtn) stopBtn.disabled = false;
@@ -1809,25 +2140,25 @@ document.addEventListener('DOMContentLoaded', () => {
     if (projectSelector) {
         projectSelector.addEventListener('change', (e) => selectCodeAgentProject(e.target.value));
     }
-    
+
     // 创建项目按钮
     const createProjectBtn = document.getElementById('createProjectBtn');
     if (createProjectBtn) {
         createProjectBtn.addEventListener('click', createCodeAgentProject);
     }
-    
+
     // 删除项目按钮
     const deleteProjectBtn = document.getElementById('deleteProjectBtn');
     if (deleteProjectBtn) {
         deleteProjectBtn.addEventListener('click', deleteCodeAgentProject);
     }
-    
+
     // 聊天发送按钮
     const codeAgentSendBtn = document.getElementById('codeAgentSendBtn');
     if (codeAgentSendBtn) {
         codeAgentSendBtn.addEventListener('click', sendCodeAgentMessage);
     }
-    
+
     // 聊天输入框回车发送
     const codeAgentInput = document.getElementById('codeAgentInput');
     if (codeAgentInput) {
@@ -1838,43 +2169,43 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-    
+
     // 编辑文件按钮
     const editFileBtn = document.getElementById('editFileBtn');
     if (editFileBtn) {
         editFileBtn.addEventListener('click', enterCodeAgentEditMode);
     }
-    
+
     // 保存文件按钮
     const saveFileBtn = document.getElementById('saveFileBtn');
     if (saveFileBtn) {
         saveFileBtn.addEventListener('click', saveCodeAgentFile);
     }
-    
+
     // 取消编辑按钮
     const cancelEditBtn = document.getElementById('cancelEditBtn');
     if (cancelEditBtn) {
         cancelEditBtn.addEventListener('click', cancelCodeAgentEdit);
     }
-    
+
     // 切换代码面板按钮
     const togglePanelBtn = document.getElementById('togglePanelBtn');
     if (togglePanelBtn) {
         togglePanelBtn.addEventListener('click', toggleCodePanel);
     }
-    
+
     // 运行代码按钮
     const runCodeBtn = document.getElementById('runCodeBtn');
     if (runCodeBtn) {
         runCodeBtn.addEventListener('click', runCodeAgentCode);
     }
-    
+
     // 停止执行按钮
     const stopCodeBtn = document.getElementById('stopCodeBtn');
     if (stopCodeBtn) {
         stopCodeBtn.addEventListener('click', stopCodeAgentExecution);
     }
-    
+
     // 命令输入框回车执行
     const commandInput = document.getElementById('commandInput');
     if (commandInput) {
@@ -1886,7 +2217,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-    
+
     // 清空输出按钮
     const clearOutputBtn = document.getElementById('clearOutputBtn');
     if (clearOutputBtn) {
@@ -1911,48 +2242,48 @@ async function executeCommandStream(command) {
         alert('请先选择一个项目');
         return;
     }
-    
+
     const outputContainer = document.getElementById('executionOutput');
     const commandSpinner = document.getElementById('commandSpinner');
     const stopBtn = document.getElementById('stopCodeBtn');
     const timeout = parseInt(document.getElementById('executionTimeout')?.value || '300');
-    
+
     // 显示命令
     appendExecutionOutput('command', `$ ${command}`);
-    
+
     // 显示加载状态
     if (commandSpinner) commandSpinner.style.display = 'inline';
     if (stopBtn) stopBtn.disabled = false;
-    
+
     // 启动计时器
     codeAgentExecutionStartTime = Date.now();
     startExecutionTimer();
     updateExecutionStatus('running', '执行中...');
-    
+
     try {
         const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/run-command`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ command, timeout })
         });
-        
+
         // 获取进程 ID
         currentCommandProcessId = response.headers.get('X-Process-Id');
-        
+
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        
+
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            
+
             buffer += decoder.decode(value, { stream: true });
-            
+
             // 处理 SSE 格式的数据
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
-            
+
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
                     try {
@@ -1964,7 +2295,7 @@ async function executeCommandStream(command) {
                 }
             }
         }
-        
+
     } catch (error) {
         console.error('命令执行错误:', error);
         appendExecutionOutput('stderr', `错误: ${error.message}`);
@@ -1985,27 +2316,27 @@ function handleCommandEvent(data) {
             console.log('命令开始执行:', data.command, 'process_id:', data.process_id);
             currentCommandProcessId = data.process_id;
             break;
-            
+
         case 'stdout':
             appendExecutionOutput('stdout', data.data);
             break;
-            
+
         case 'stderr':
             appendExecutionOutput('stderr', data.data);
             break;
-            
+
         case 'exit':
             const exitClass = data.success ? 'exit-success' : 'exit-error';
             appendExecutionOutput(exitClass, `[退出码: ${data.code}, 耗时: ${data.duration}秒]`);
-            updateExecutionStatus(data.success ? 'success' : 'error', 
+            updateExecutionStatus(data.success ? 'success' : 'error',
                 `${data.success ? '完成' : '失败'} (${formatDuration(data.duration)})`);
             break;
-            
+
         case 'terminated':
             appendExecutionOutput('terminated', `[进程已终止] ${data.message}`);
             updateExecutionStatus('error', '已终止');
             break;
-            
+
         case 'error':
             appendExecutionOutput('stderr', `错误: ${data.message}`);
             updateExecutionStatus('error', data.message);
@@ -2019,16 +2350,16 @@ function handleCommandEvent(data) {
 function appendExecutionOutput(type, text) {
     const outputContainer = document.getElementById('executionOutput');
     if (!outputContainer) return;
-    
+
     // 移除占位符
     const placeholder = outputContainer.querySelector('.output-placeholder');
     if (placeholder) placeholder.remove();
-    
+
     const line = document.createElement('div');
     line.className = `output-line output-${type}`;
     line.textContent = text;
     outputContainer.appendChild(line);
-    
+
     // 自动滚动到底部
     outputContainer.scrollTop = outputContainer.scrollHeight;
 }
@@ -2051,14 +2382,14 @@ async function terminateCurrentCommand() {
         console.log('没有正在运行的命令');
         return;
     }
-    
+
     try {
         const response = await fetch(`/api/code-agent/projects/${codeAgentCurrentProject}/terminate-command`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ process_id: currentCommandProcessId })
         });
-        
+
         const data = await response.json();
         if (data.success) {
             appendExecutionOutput('terminated', '[命令已被用户终止]');
@@ -2077,7 +2408,7 @@ async function stopCodeAgentExecution() {
     if (currentCommandProcessId) {
         await terminateCurrentCommand();
     }
-    
+
     // 然后调用原有的停止逻辑（如果存在）
     if (codeAgentExecutingTaskId && originalStopCodeAgentExecution) {
         // 原有逻辑
@@ -2093,7 +2424,7 @@ async function stopCodeAgentExecution() {
             console.error('停止错误:', error);
         }
     }
-    
+
     stopExecutionTimer();
     const stopBtn = document.getElementById('stopCodeBtn');
     if (stopBtn) stopBtn.disabled = true;

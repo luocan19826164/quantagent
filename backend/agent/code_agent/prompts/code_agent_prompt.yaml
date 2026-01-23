@@ -246,3 +246,24 @@ context_repo_map: |
 context_file_content: |
   ### 活跃文件内容
   {file_content}
+
+# ==================== 统一架构动态 Prompt 模板 ====================
+
+# 计划状态模板（Plan 模式专用）
+# 变量: {plan_summary}, {total_steps}, {current_step_id}
+plan_status_template: |
+  ## 当前执行计划
+  你正在执行一个多步骤计划。不要偏离计划。
+  
+  进度: 第 {current_step_id}/{total_steps} 步
+  计划概览:
+  {plan_summary}
+
+# 当前步骤上下文模板（Plan 模式专用）
+# 变量: {step_description}, {expected_outcome}
+current_step_context_template: |
+  ## 当前任务（Step {current_step_id}）
+  **必须专注执行此步骤**，不要提前执行后续步骤。
+  
+  - 目标: {step_description}
+  - 预期结果: {expected_outcome}

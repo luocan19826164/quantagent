@@ -4,6 +4,7 @@ Plan 数据模型
 """
 
 import uuid
+import logging
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
@@ -131,6 +132,28 @@ class Plan:
             s.status in (StepStatus.DONE, StepStatus.SKIPPED) 
             for s in self.steps
         )
+    
+    def is_completed(self) -> bool:
+        """检查计划是否完成（别名，用于兼容）"""
+        return self.is_complete()
+    
+    def complete_step(self, step_id: int, result: str = "", files_changed: List[str] = None):
+        """
+        完成指定步骤
+        
+        Args:
+            step_id: 步骤ID
+            result: 步骤执行结果
+            files_changed: 变更的文件列表
+        """
+        step = self.get_current_step()
+        if step and step.id == step_id:
+            step.status = StepStatus.DONE
+            step.completed_at = datetime.now()
+            step.result = result
+            if files_changed:
+                step.files_changed = files_changed
+            logging.info(f"Plan: Completed step {step_id}")
     
     def has_failed(self) -> bool:
         """检查计划是否失败"""

@@ -1,0 +1,11 @@
+# 量化回测依赖包
+pandas>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+python-binance>=1.0.19
+ta-lib>=0.4.28
+jupyter>=1.0.0
+ipython>=8.0.0
+tqdm>=4.65.0
+scipy>=1.10.0

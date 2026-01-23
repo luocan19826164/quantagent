@@ -147,6 +147,16 @@ class CodeAgentPromptLoader:
     def get_context_more_files_info(self) -> str:
         """获取活跃文件更多文件信息子模板"""
         return self.config.get('context_more_files_info', '')
+        
+    # ==================== 统一架构动态 Prompt 模板 ====================
+    
+    def get_plan_status_template(self) -> str:
+        """获取计划状态模板"""
+        return self.config.get('plan_status_template', '')
+    
+    def get_current_step_context_template(self) -> str:
+        """获取当前步骤上下文模板"""
+        return self.config.get('current_step_context_template', '')
 
 
 # 单例模式，避免重复加载配置文件

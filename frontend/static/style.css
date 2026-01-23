@@ -1267,6 +1267,7 @@ body {
     padding: 16px 20px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     background: rgba(255, 255, 255, 0.02);
+    flex-shrink: 0; /* 防止头部被压缩 */
 }
 
 .code-chat-header h3 {
@@ -1277,14 +1278,36 @@ body {
 }
 
 .code-chat-messages {
-    flex: 1;
-    overflow-y: auto;
+    flex: 1 1 0; /* flex-grow: 1, flex-shrink: 1, flex-basis: 0 - 确保占据剩余空间 */
+    overflow-y: scroll; /* 强制显示滚动条（即使内容不多） */
     overflow-x: hidden;
     padding: 20px;
     display: flex;
     flex-direction: column;
     gap: 16px;
     min-height: 0; /* 关键：flex 子元素需要这个才能在有限高度内滚动 */
+    max-height: 100%; /* 确保不超过父容器 */
+    /* 确保滚动条可见 */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+/* Webkit 浏览器滚动条样式 */
+.code-chat-messages::-webkit-scrollbar {
+    width: 8px;
+}
+
+.code-chat-messages::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.code-chat-messages::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+}
+
+.code-chat-messages::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.5);
 }
 
 .code-chat-messages .bot-message,
@@ -1298,7 +1321,11 @@ body {
     word-wrap: break-word;
     overflow-wrap: break-word;
     word-break: break-word;
-    overflow: hidden;
+    /* 移除 overflow: hidden，让内容自然扩展 */
+    overflow: visible;
+    /* 确保消息元素可以自然扩展高度 */
+    flex-shrink: 0;
+    min-height: auto;
 }
 
 .code-chat-messages .bot-message {
@@ -1342,6 +1369,9 @@ body {
     gap: 12px;
     background: rgba(255, 255, 255, 0.02);
     align-items: flex-end;
+    flex-shrink: 0; /* 防止输入框区域被压缩 */
+    position: relative; /* 确保输入框在正确的层级 */
+    z-index: 1; /* 确保输入框可以交互 */
 }
 
 .code-chat-input-area textarea {
@@ -1356,6 +1386,7 @@ body {
     color: #e0e0e0;
     min-height: 48px;
     max-height: 150px;
+    pointer-events: auto; /* 确保可以交互 */
 }
 
 .code-chat-input-area textarea::placeholder {
@@ -1658,18 +1689,54 @@ body {
     color: #a5b4fc;
 }
 
+.file-tree-item .tree-toggle {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    margin-right: 4px;
+    text-align: center;
+    line-height: 16px;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.15s;
+}
+
+.file-tree-item .tree-toggle:hover {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.file-tree-item .tree-toggle-empty {
+    visibility: hidden;
+}
+
 .file-tree-item .file-icon {
-    margin-right: 10px;
+    margin-right: 8px;
     font-size: 14px;
+    flex-shrink: 0;
+}
+
+.file-tree-item .file-name {
+    flex: 1;
+    cursor: pointer;
+}
+
+.file-tree-item.dir .file-name {
+    cursor: default;
 }
 
 .file-tree-item.dir {
     font-weight: 500;
 }
 
-.file-tree-item.indent-1 { padding-left: 32px; }
-.file-tree-item.indent-2 { padding-left: 48px; }
-.file-tree-item.indent-3 { padding-left: 64px; }
+.tree-children {
+    display: block;
+}
+
+.tree-children[style*="display: none"] {
+    display: none !important;
+}
 
 /* 文件编辑器 - 暗色主题 */
 .file-editor-container {

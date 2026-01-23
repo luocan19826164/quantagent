@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-01-20T13:58:01.755953",
+  "updated_at": "2026-01-20T13:58:01.756851",
+  "total_chunks": 1,
+  "embedder_model": "mock-embedder",
+  "dimension": 384,
+  "indexed_files": [
+    "main.py"
+  ]
+}
